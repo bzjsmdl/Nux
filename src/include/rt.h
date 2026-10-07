@@ -47,4 +47,30 @@ namespace nux {
 		void print(std::string __msg);
 		std::string input(std::string tip);
 	}
+	class Pool {
+		private:
+		void* ptr = nullptr;
+		size_t size = 1024;
+		size_t used = 0;
+
+		public:
+		Pool(size_t N) : size(N) {
+			this->ptr = malloc(N);
+		}
+
+		Pool() {
+			this->ptr = malloc(size);
+		}
+
+		void* allocate(size_t __size) {
+			if (used + __size >= size) return nullptr;
+			void* ret = ptr + used;
+			used += __size;
+			return ret;
+		}
+
+		~Pool() {
+			free(ptr);
+		}
+	};
 }

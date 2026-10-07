@@ -45,11 +45,14 @@ void Server::LoadWorlds() {
 }
 
 void Server::LoadConfig() {
+	nux::Pool LocalPool(MB(8));
+	FILE* hd_config = (FILE*)LocalPool.allocate(sizeof(FILE*));
+
 	std::string config_file = t->data_path + "server.json";
 	
 	this->EnsureDirExists(t->data_path);
 
-	json config; FILE* hd_config = nullptr;
+	json config;
 	if (!fs::exists(config_file)) {
 		hd_config = fopen(config_file.c_str(), "wb");
 		if (errno != 0 && hd_config == nullptr) {
@@ -87,7 +90,7 @@ void Server::LoadConfig() {
 	else {
 		log::info("Try to read file " +  config_file);
 		size_t len = fs::flen(hd_config);
-		char text[len + 1]; text[len] = 0;
+		char* text = (char*)LocalPool.allocate(len + 1); text[len] = 0;
 		// I think this function don't check return value because I want to fast finish it.
 		fread(text, 1, len, hd_config);
 		// but writing a comment is best in here
