@@ -98,6 +98,7 @@ void Server::LoadConfig() {
 
 		// parse file
 		try {
+			if (!text) printf("null\n");
 			config = json::parse((std::string)text);
 		}
 		catch (const std::exception& e) {

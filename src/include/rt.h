@@ -64,7 +64,7 @@ namespace nux {
 
 		void* allocate(size_t __size) {
 			if (used + __size >= size) return nullptr;
-			void* ret = ptr + used;
+			void* ret = (char*)ptr + used;
 			used += __size;
 			return ret;
 		}

@@ -1,4 +1,5 @@
 #!/bin/bash
-g++ '/home/dell/Shamhi/Nux/src/nux.cpp' '/home/dell/Shamhi/Nux/src/utils/fmt.cpp' \
-'/home/dell/Shamhi/Nux/src/utils/log.cpp'  '/home/dell/Shamhi/Nux/src/server.cpp' \
--O3 -o ~/Shamhi/nux-server -flto=full
+g++ ./src/nux.cpp ./src/utils/fmt.cpp \
+./src/utils/log.cpp  ./src/server.cpp \
+./src/console.cpp \
+-O3 -o ./nux-server -flto

@@ -12,8 +12,6 @@ int main(int argc, const char** argv) {
 	t->data_path = t->ServerRootDir + "/data/"; t->plugins_path = t->ServerRootDir + "/plugins/";
 	for (int i = 0; i < argc; i++) {
 		if (strequ(argv[i], "--load-plugins")) t->LoadPlugin = true;
-		else if (strequ("--disable-color", argv[i])) t->color = true;
-		else if (strequ("--enable-color", argv[i])) t->color = false;
 		else if (strequ("-debug", argv[i])) t->debug = true;
 		else if (strequ("-werr", argv[i])) t->werr = true;
 		else if (strequ("-v", argv[i]) || strequ("--version", argv[i])) printf("Nux Version - alpha 1.0.0\n");
