@@ -4,7 +4,7 @@ using namespace nlohmann;
 
 std::mutex LogMutex;
 
-static constexpr std::array<const char*, 72> options = {"server-name", "gamemode", "force-gamemode", "difficulty", "allow-cheats", "max-players", "online-mode", "allow-list", "server-port", "server-portv6", "enable-lan-visibility", "view-distance", "tick-distance", "player-idle-timeout", "allow-player-joining", "max-threads", "level-name", "level-seed", "default-player-permission-level", "texturepack-required", "content-log-file-enabled", "content-log-console-output-enabled", "content-log-level", "compression-threshold", "compression-algorithm", "server-authoritative-movement-strict", "server-authoritative-dismount-strict", "server-authoritative-entity-interactions-strict", "player-position-acceptance-threshold", "player-movement-action-direction-threshold", "server-authoritative-block-breaking-pick-range-scalar", "chat-restriction", "disable-player-interaction", "client-side-chunk-generation-enabled", "block-network-ids-are-hashes", "disable-persona", "disable-custom-skins", "server-build-radius-ratio", "allow-outbound-script-debugging", "allow-inbound-script-debugging", "force-inbound-debug-port", "script-debugger-auto-attach", "script-debugger-auto-attach-connect-address", "script-debugger-auto-attach-timeout", "script-debugger-passcode", "script-watchdog-enable", "script-watchdog-enable-exception-handling", "script-watchdog-enable-shutdown", "script-watchdog-hang-exception", "script-watchdog-hang-threshold", "script-watchdog-spike-threshold", "script-watchdog-slow-threshold", "script-watchdog-memory-warning", "script-watchdog-memory-limit", "diagnostics-capture-auto-start", "diagnostics-capture-max-files", "diagnostics-capture-max-file-size", "disable-client-vibrant-visuals", "sentry-rate-limit-window", "sentry-max-events-per-window", "enable-profiler", "enable-editor-network-metrics", "level-type", "server-authoritative-block-breaking", "emit-server-telemetry", "isHardcore", "language", "op-permission-level", "netease-support", "only-netease"};
+static constexpr std::array<const char*, 70> options = {"server-name", "gamemode", "force-gamemode", "difficulty", "allow-cheats", "max-players", "online-mode", "allow-list", "server-port", "server-portv6", "enable-lan-visibility", "view-distance", "tick-distance", "player-idle-timeout", "allow-player-joining", "max-threads", "level-name", "level-seed", "default-player-permission-level", "texturepack-required", "content-log-file-enabled", "content-log-console-output-enabled", "content-log-level", "compression-threshold", "compression-algorithm", "server-authoritative-movement-strict", "server-authoritative-dismount-strict", "server-authoritative-entity-interactions-strict", "player-position-acceptance-threshold", "player-movement-action-direction-threshold", "server-authoritative-block-breaking-pick-range-scalar", "chat-restriction", "disable-player-interaction", "client-side-chunk-generation-enabled", "block-network-ids-are-hashes", "disable-persona", "disable-custom-skins", "server-build-radius-ratio", "allow-outbound-script-debugging", "allow-inbound-script-debugging", "force-inbound-debug-port", "script-debugger-auto-attach", "script-debugger-auto-attach-connect-address", "script-debugger-auto-attach-timeout", "script-debugger-passcode", "script-watchdog-enable", "script-watchdog-enable-exception-handling", "script-watchdog-enable-shutdown", "script-watchdog-hang-exception", "script-watchdog-hang-threshold", "script-watchdog-spike-threshold", "script-watchdog-slow-threshold", "script-watchdog-memory-warning", "script-watchdog-memory-limit", "diagnostics-capture-auto-start", "diagnostics-capture-max-files", "diagnostics-capture-max-file-size", "disable-client-vibrant-visuals", "sentry-rate-limit-window", "sentry-max-events-per-window", "enable-profiler", "enable-editor-network-metrics", "level-type", "server-authoritative-block-breaking", "emit-server-telemetry", "isHardcore", "language", "op-permission-level", "netease-support", "only-netease"};
 
 Server::Server() {
 	log::info("Server started");
@@ -45,14 +45,11 @@ void Server::LoadWorlds() {
 }
 
 void Server::LoadConfig() {
-	nux::Pool LocalPool(MB(8));
-	FILE* hd_config = (FILE*)LocalPool.allocate(sizeof(FILE*));
-
 	std::string config_file = t->data_path + "server.json";
 	
 	this->EnsureDirExists(t->data_path);
 
-	json config;
+	json config; FILE* hd_config = nullptr;
 	if (!fs::exists(config_file)) {
 		hd_config = fopen(config_file.c_str(), "wb");
 		if (errno != 0 && hd_config == nullptr) {
@@ -90,6 +87,7 @@ void Server::LoadConfig() {
 	else {
 		log::info("Try to read file " +  config_file);
 		size_t len = fs::flen(hd_config);
+		nux::Pool LocalPool(MB(8));
 		char* text = (char*)LocalPool.allocate(len + 1); text[len] = 0;
 		// I think this function don't check return value because I want to fast finish it.
 		fread(text, 1, len, hd_config);
@@ -98,7 +96,6 @@ void Server::LoadConfig() {
 
 		// parse file
 		try {
-			if (!text) printf("null\n");
 			config = json::parse((std::string)text);
 		}
 		catch (const std::exception& e) {
@@ -107,12 +104,13 @@ void Server::LoadConfig() {
 		}
 	}
 	fclose(hd_config);
+	log::info("Finish parsing config file");
 
 	// load into memory
 	for (size_t i = 0; i < options.size() && !config.empty(); i++) {
 		try {
-			std::string key = options[i];
-			if (config.contains(key)) {
+			if (config.contains(options[i])) {
+				std::string key = options[i];
 				if (key == "gamemode" && config[key].is_number_integer()) {
 					switch ((int)config[key]) {
 						case 0: this->data[i] = "survival"; break;
@@ -128,8 +126,8 @@ void Server::LoadConfig() {
 						}
 					}
 				}
-				else if (options[i] == "difficulty" && config[options[i]].is_number_integer()) {
-					switch ((int)config[options[i]]) {
+				else if (key == "difficulty" && config[key].is_number_integer()) {
+					switch ((int)config[key]) {
 						case 0: this->data[i] = "peaceful"; break;
 						case 1: this->data[i] = "easy"; break;
 						case 2: this->data[i] = "normal"; break;
@@ -146,7 +144,11 @@ void Server::LoadConfig() {
 				else if (key == "server-build-radius-ratio" && config[key].is_number_float()) {
 					this->data.server_build_radius_ratio = std::to_string((float)config[key]);
 				}
-				else this->data[i] = config[options[i]];
+				else if (config[key].is_null()) {
+					CONFIG_PARSE_FAIL(key + "'s value from null is not valid");
+					this->error = true; return;
+				}
+				else this->data[i] = config[key];
 			}
 		}
 		catch (const std::exception& e) {
