@@ -15,6 +15,7 @@ Server::Server() {
 
 	if (this->error) goto end;
 	LoadWorlds();
+
 	end:
 		log::info("Server shut down");
 }
@@ -24,16 +25,9 @@ bool Server::GetError() {
 }
 
 void Server::LoadPlugins() {
-	if (t->LoadPlugin && !fs::exists(t->plugins_path)) {
-		errno = 0;
-		mkdirat(AT_FDCWD, t->plugins_path.c_str(), S_IRWXU | S_IROTH);
-		if (errno != 0) {
-			log::error("Failed to create directory " + t->plugins_path + ". Because " + (std::string)strerror(errno));
-			this->error = true; return;
-		}
-		log::info("Successfully create directory " + t->plugins_path);
+	if (t->LoadPlugin) {
+		this->EnsureDirExists(t->plugins_path);
 	}
-	
 }
 
 void Server::LoadWorlds() {

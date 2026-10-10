@@ -28,3 +28,8 @@ extern Table* t;
     nux::log::error("Server failed when it tried to parse config file");\
     if (t->debug) nux::log::debug(debug_msg);\
 }
+
+enum ErrorCode {    // rt throw error
+	NoError,
+    VectorTooSmall
+};

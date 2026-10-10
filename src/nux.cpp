@@ -3,6 +3,10 @@
 #include "include/server.h"
 #include "include/console.h"
 
+#if !defined(__linux__) 
+#error "Nux targets Linux only. Please use Linux environment"
+#endif
+
 std::string plugins_path;
 std::vector<std::string> plugins;
 Table* t = nullptr;
