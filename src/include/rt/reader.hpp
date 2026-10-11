@@ -12,8 +12,7 @@ namespace nux {
 			size_t pos = 0;
 
 			template <typename T>
-			T read() {
-				size_t size = sizeof(T);
+			T read(size_t size) {
 				// check the range of reading.
 				// if use `this->pos + size >= this->pool_size`:
 				// if the size of pool is 8, this memory's layout: |0|1|2|3|4|5|6|7|
@@ -41,19 +40,16 @@ namespace nux {
 			void seek(signed long int offset) {
 				this->pos += offset;
 				if ((signed long int)this->pos < 0) throw ErrorCode::UnsignedWrapAround;
-				if (offset > this->pool_size - this->pos) throw ErrorCode::VectorTooSmall;
+				if (this->pos > this->pool_size) throw ErrorCode::VectorTooSmall;
 			}
 
 			size_t tell() {
 				return this->pos;
 			}
 
-			uint8_t read_u8() {
-				return read<uint8_t>();
-			}
-
-			int read_int() {
-				return read<int>();
+			template <typename T>
+			T read() {
+				return read<T>(sizeof(T));
 			}
 	};
 }
