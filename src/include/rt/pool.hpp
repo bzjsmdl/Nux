@@ -11,12 +11,16 @@ namespace nux {
 
 		public:
 		Pool(size_t N) : len(N) {
-			this->ptr = aligned_alloc(64, this->len);
+			this->len = ((N >> 6) + 1) * 64;
+			this->ptr = malloc(this->len);
 		}
 
 		Pool() {
 			this->ptr = malloc(this->len);
 		}
+
+		Pool(const Pool&) = delete;
+		Pool& operator=(const Pool&) = delete;
 
 		void* allocate(size_t __size) {
 			// yoiu can go to https://github.com/bzjsmdl/Nux/blob/main/src/include/rt/reader.hpp#L17 if you want to know why i write `__size > this->len - this->used`
