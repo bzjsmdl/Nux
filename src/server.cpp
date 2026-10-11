@@ -9,12 +9,20 @@ static constexpr std::array<const char*, 70> options = {"server-name", "gamemode
 Server::Server() {
 	log::info("Server started");
 
-	std::thread t1(&Server::LoadConfig, this);
-	std::thread t2(&Server::LoadPlugins, this);
-	t1.join(); t2.join(); 
+	// std::thread t1(&Server::LoadConfig, this);
+	// std::thread t2(&Server::LoadPlugins, this);
+	// t1.join(); t2.join(); 
 
-	if (this->error) goto end;
-	LoadWorlds();
+	// if (this->error) goto end;
+	// LoadWorlds();
+	nux::Pool p = nux::Pool();
+	nux::Reader r(p);
+	try {
+		r.seek(-4);
+	}
+	catch (enum ErrorCode e) {
+		if (e == ErrorCode::UnsignedWrapAround) printf("yes\n");
+	}
 
 	end:
 		log::info("Server shut down");

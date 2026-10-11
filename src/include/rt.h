@@ -2,6 +2,7 @@
 
 #include "cdlib.h"
 #include "rt/pool.hpp"
+#include "rt/reader.hpp"
 
 namespace nux {
 	namespace log {

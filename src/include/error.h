@@ -29,7 +29,7 @@ extern Table* t;
     if (t->debug) nux::log::debug(debug_msg);\
 }
 
-enum ErrorCode {    // error of runtime throwing  // 管他英文语法对不对
+enum ErrorCode {    // error of runtime throwing
     VectorTooSmall,
     UnsignedWrapAround
 };

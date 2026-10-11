@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cdlib.h"
+#include "../cdlib.h"
 #include "pool.hpp"
 #include "../error.h"
 
@@ -9,7 +9,7 @@ namespace nux {
 		private:
 			const uint8_t* data;
 			size_t pool_size;
-			size_t pos;
+			size_t pos = 0;
 
 			template <typename T>
 			T read() {
