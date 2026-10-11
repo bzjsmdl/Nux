@@ -5,21 +5,22 @@
 namespace nux {
     class Pool {
 		private:
-		alignas(64) void* ptr = nullptr;
-		size_t pool_size = 1024;
+		void* ptr = nullptr;
+		size_t len = 1024;
 		size_t used = 0;
 
 		public:
-		Pool(size_t N) : pool_size(N) {
-			this->ptr = malloc(this->pool_size);
+		Pool(size_t N) : len(N) {
+			this->ptr = aligned_alloc(64, this->len);
 		}
 
 		Pool() {
-			this->ptr = malloc(this->pool_size);
+			this->ptr = malloc(this->len);
 		}
 
 		void* allocate(size_t __size) {
-			if (this->used + __size >= this->pool_size) return nullptr;
+			// yoiu can go to https://github.com/bzjsmdl/Nux/blob/main/src/include/rt/reader.h#L17 if you want to know why i write `__size > this->len - this->used`
+			if (__size > this->len - this->used) return nullptr;
 			void* ret = (char*)this->ptr + this->used;
 			this->used += __size;
 			return ret;
@@ -30,7 +31,7 @@ namespace nux {
 		}
 
 		size_t size() {
-			return this->pool_size;
+			return this->len;
 		}
 
 		~Pool() {

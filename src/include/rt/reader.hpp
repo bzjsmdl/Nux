@@ -14,12 +14,24 @@ namespace nux {
 			template <typename T>
 			T read() {
 				size_t size = sizeof(T);
-				if (this->pos + size >= pool_size) throw ErrorCode.VectorTooSmall;
-				T ret = *(T*)(this->data + this->pos);
+				// check the range of reading.
+				// if use `this->pos + size >= this->pool_size`:
+				// if the size of pool is 8, this memory's layout: |0|1|2|3|4|5|6|7|
+				// if this->pos == 0, read<int>() => sizeof(int) = 4, this->pos + 4 = 4
+				// and if this->pos == -4, read<int>() => sizeof(int) = 4, this->pos + 4 = 0
+				// in this expression, it's valid -- but we expect it's invalid!!!
+				// if use `size > this->pool_size - this->pos`
+				// when this->pos == 0, read<int>() => sizeof(int) = 4, this->pool_size + this->pos = 8 - 0 = 4 (valid)
+				// when this->pos == -4, read<int>() => sizeof(int) = 4, this->pool_size + this->pos = 8 - (-4) = 12 (invalid)
+				// because of this, use `size > this->pool_size - this->pos` in here
+				if (size > this->pool_size - this->pos) throw ErrorCode::VectorTooSmall;
+				T ret;
+				memcpy(&ret, (this->data + this->pos), size);
+				seek(size);
 				return ret;
 			}
 		public:
-			Reader(Pool __data, size_t __pos = 0) : pos(__pos) {
+			Reader(Pool& __data, size_t __pos = 0) : pos(__pos) {
 				this->pool_size = __data.size();
 				this->data = (const uint8_t*)__data.data();
 			}
