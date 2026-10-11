@@ -27,6 +27,8 @@ namespace nux {
 				if (size > this->pool_size - this->pos) throw ErrorCode::VectorTooSmall;
 				T ret;
 				memcpy(&ret, (this->data + this->pos), size);
+
+				// i promise it don't throw an error~ 绝对!!!
 				seek(size);
 				return ret;
 			}
@@ -38,6 +40,13 @@ namespace nux {
 
 			void seek(signed long int offset) {
 				this->pos += offset;
+				__asm__(
+					"jb %l[error]"		// if overflow, throw error,
+					: : : : error
+				);
+				return;
+				error:
+					throw ErrorCode::UnsignedWrapAround;
 			}
 
 			size_t tell() {

@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <alloca.h>
+#include <immintrin.h>
 
 // Include Thrid-Party Library
 // get more information: `include/README.md`!
