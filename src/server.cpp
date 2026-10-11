@@ -18,10 +18,10 @@ Server::Server() {
 	nux::Pool p = nux::Pool();
 	nux::Reader r(p);
 	try {
-		r.seek(-4);
+		r.seek(10124);
 	}
 	catch (enum ErrorCode e) {
-		if (e == ErrorCode::UnsignedWrapAround) printf("yes\n");
+		if (e == ErrorCode::VectorTooSmall) printf("yes\n");
 	}
 
 	end:

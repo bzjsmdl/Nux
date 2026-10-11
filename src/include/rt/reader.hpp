@@ -41,6 +41,7 @@ namespace nux {
 			void seek(signed long int offset) {
 				this->pos += offset;
 				if ((signed long int)this->pos < 0) throw ErrorCode::UnsignedWrapAround;
+				if (offset > this->pool_size - this->pos) throw ErrorCode::VectorTooSmall;
 			}
 
 			size_t tell() {
