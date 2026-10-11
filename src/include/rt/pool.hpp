@@ -19,7 +19,7 @@ namespace nux {
 		}
 
 		void* allocate(size_t __size) {
-			// yoiu can go to https://github.com/bzjsmdl/Nux/blob/main/src/include/rt/reader.h#L17 if you want to know why i write `__size > this->len - this->used`
+			// yoiu can go to https://github.com/bzjsmdl/Nux/blob/main/src/include/rt/reader.hpp#L17 if you want to know why i write `__size > this->len - this->used`
 			if (__size > this->len - this->used) return nullptr;
 			void* ret = (char*)this->ptr + this->used;
 			this->used += __size;
