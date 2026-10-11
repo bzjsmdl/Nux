@@ -40,13 +40,7 @@ namespace nux {
 
 			void seek(signed long int offset) {
 				this->pos += offset;
-				__asm__ __volatile__(
-					"js %l[error]"		// if overflow, throw error,
-					: : : : error
-				);
-				return;
-				error:
-					throw ErrorCode::UnsignedWrapAround;
+				if ((signed long int)this->pos < 0) throw ErrorCode::UnsignedWrapAround;
 			}
 
 			size_t tell() {
