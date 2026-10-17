@@ -48,6 +48,12 @@
 	#define DEFAULT_CONFIG_CONTENT "{\"server-name\":\"Dedicated Server\",\"gamemode\":\"survival\",\"force-gamemode\":false,\"difficulty\":\"easy\",\"allow-cheats\":false,\"max-players\":10,\"online-mode\":true,\"allow-list\":true,\"server-port\":19132,\"server-portv6\":19133,\"transport\":\"nethernet\",\"enable-lan-visibility\":true,\"view-distance\":32,\"tick-distance\":4,\"player-idle-timeout\":30,\"max-threads\":8,\"level-name\":\"Bedrock level\",\"level-seed\":\"\",\"default-player-permission-level\":\"member\",\"texturepack-required\":false,\"content-log-file-enabled\":false,\"content-log-console-output-enabled\":false,\"content-log-level\":\"info\",\"compression-threshold\":1,\"compression-algorithm\":\"zlib\",\"server-authoritative-movement-strict\":false,\"server-authoritative-dismount-strict\":false,\"server-authoritative-entity-interactions-strict\":false,\"player-position-acceptance-threshold\":0.5,\"player-movement-action-direction-threshold\":0.85,\"server-authoritative-block-breaking-pick-range-scalar\":1.5,\"chat-restriction\":\"None\",\"disable-player-interaction\":false,\"client-side-chunk-generation-enabled\":true,\"block-network-ids-are-hashes\":true,\"disable-persona\":false,\"disable-custom-skins\":false,\"server-build-radius-ratio\":\"Disabled\",\"allow-outbound-script-debugging\":false,\"allow-inbound-script-debugging\":false,\"script-debugger-auto-attach\":\"disabled\",\"server-ip\":\"\",\"server-udp-ports\":\"\",\"allow-player-joining\":true,\"force-inbound-debug-port\":19144,\"script-debugger-listen-address\":\"127.0.0.1\",\"script-debugger-auto-attach-connect-address\":\"localhost:19144\",\"script-debugger-auto-attach-timeout\":0,\"script-debugger-passcode\":\"\",\"script-watchdog-enable\":true,\"script-watchdog-enable-exception-handling\":true,\"script-watchdog-enable-shutdown\":true,\"script-watchdog-hang-exception\":true,\"script-watchdog-hang-threshold\":10000,\"script-watchdog-spike-threshold\":100,\"script-watchdog-slow-threshold\":10,\"script-watchdog-memory-warning\":100,\"script-watchdog-memory-limit\":250,\"diagnostics-capture-auto-start\":false,\"diagnostics-capture-max-files\":5,\"diagnostics-capture-max-file-size\":2097152,\"disable-client-vibrant-visuals\":true,\"sentry-rate-limit-window\":60,\"sentry-max-events-per-window\":10,\"enable-profiler\":true,\"enable-editor-network-metrics\":true,\"convert-world-to-editor-project\":false}"
 	#define DEFAULT_CONFIG_SIZE 2213
 
+	// Visibility Flag Macro
+	// they are only "tip"
+	#define pub
+	#define priv
+	#define prot
+
 	// Error Info
 	#define ALLOCATE_MEMORY_FAIL(debug_msg) {\
 		nux::log::error("Server failed when it tries to allocate memory");\
@@ -383,116 +389,63 @@
 
 	namespace nux::log {
 		static std::mutex LogMutex;
+
+		// don't use it!!! we assume it's private!!!
+		priv static std::string time_format() {
+			time_t __time = time(nullptr);
+			tm *_time = localtime(&__time);
+			std::string time_str;
+			if (_time) {
+				std::string sec = std::to_string(_time->tm_sec),
+							min = std::to_string(_time->tm_min),
+							hour = std::to_string(_time->tm_hour);
+				if (sec.length() == 1) sec.insert(sec.begin(), '0');
+				if (min.length() == 1) min.insert(min.begin(), '0');
+				if (hour.length() == 1) hour.insert(hour.begin(), '0');
+				time_str += std::to_string(_time->tm_year + 1900) + '-' + std::to_string(_time->tm_mon + 1) + '-' + std::to_string(_time->tm_mday) + ' ' + hour + ':' + min + ':' + sec;
+			}
+			else {
+				time_str += "XXXX-X-X XX:XX:XX";
+			}
+			return time_str;
+		}
+
+		// don't use it!!! we assume it's private!!!
+		priv static void no_color(std::string& msg) {
+			for (size_t i = 0; i < msg.size(); i++) {
+				if (msg[i] == '$' && ((i != 0 && msg[i - 1] != '\\') || i == 0)) {
+					msg.erase(msg.begin() + i, msg.begin() + i + 2);
+					i--;
+				}
+			}
+		}
+
 		void debug(std::string __msg) {
 			std::lock_guard<std::mutex> lock(LogMutex);
-			time_t __time = time(nullptr);
-			tm *_time = localtime(&__time);
-			std::string time_str;
-			if (_time) {
-				std::string sec = std::to_string(_time->tm_sec),
-							min = std::to_string(_time->tm_min),
-							hour = std::to_string(_time->tm_hour);
-				if (sec.length() == 1) sec.insert(sec.begin(), '0');
-				if (min.length() == 1) min.insert(min.begin(), '0');
-				if (hour.length() == 1) hour.insert(hour.begin(), '0');
-				time_str += std::to_string(_time->tm_year + 1900) + '-' + std::to_string(_time->tm_mon + 1) + '-' + std::to_string(_time->tm_mday) + ' ' + hour + ':' + min + ':' + sec;
-			}
-			else {
-				time_str += "XXXX-X-X XX:XX:XX";
-			}
-			std::string msg = "$3$S" + time_str + "$6 [DUBUG]$r " + __msg + "\n";
-			if (!t->color) {
-				for (size_t i = 0; i < msg.size(); i++) {
-					if (msg[i] == '$' && ((i != 0 && msg[i - 1] != '\\') || i == 0)) {
-						msg.erase(msg.begin() + i, msg.begin() + i + 2);
-						i--;
-					}
-				}
-			}
+			std::string msg = "$3$S" + time_format() + "$6 [DUBUG]$r " + __msg + "\n";
+			if (!t->color) no_color(msg);
 			nux::fmt::print(msg);
 		}
+
 		void info(std::string __msg) {
 			std::lock_guard<std::mutex> lock(LogMutex);
-			time_t __time = time(nullptr);
-			tm *_time = localtime(&__time);
-			std::string time_str;
-			if (_time) {
-				std::string sec = std::to_string(_time->tm_sec),
-							min = std::to_string(_time->tm_min),
-							hour = std::to_string(_time->tm_hour);
-				if (sec.length() == 1) sec.insert(sec.begin(), '0');
-				if (min.length() == 1) min.insert(min.begin(), '0');
-				if (hour.length() == 1) hour.insert(hour.begin(), '0');
-				time_str += std::to_string(_time->tm_year + 1900) + '-' + std::to_string(_time->tm_mon + 1) + '-' + std::to_string(_time->tm_mday) + ' ' + hour + ':' + min + ':' + sec;
-			}
-			else {
-				time_str += "XXXX-X-X XX:XX:XX";
-			}
-			std::string msg = "$3$S" + time_str + "$r$4 [INFO]$r " + __msg + "\n";
-			if (!t->color) {
-				for (size_t i = 0; i < msg.size(); i++) {
-					if (msg[i] == '$' && ((i != 0 && msg[i - 1] != '\\') || i == 0)) {
-						msg.erase(msg.begin() + i, msg.begin() + i + 2);
-						i--;
-					}
-				}
-			}
+			std::string msg = "$3$S" + time_format() + "$4 [INFO]$r " + __msg + "\n";
+			if (!t->color) no_color(msg);
 			nux::fmt::print(msg);
 		}
+
 		void error(std::string __msg) {
 			std::lock_guard<std::mutex> lock(LogMutex);
-			time_t __time = time(nullptr);
-			tm *_time = localtime(&__time);
-			std::string time_str;
-			if (_time) {
-				std::string sec = std::to_string(_time->tm_sec),
-							min = std::to_string(_time->tm_min),
-							hour = std::to_string(_time->tm_hour);
-				if (sec.length() == 1) sec.insert(sec.begin(), '0');
-				if (min.length() == 1) min.insert(min.begin(), '0');
-				if (hour.length() == 1) hour.insert(hour.begin(), '0');
-				time_str += std::to_string(_time->tm_year + 1900) + '-' + std::to_string(_time->tm_mon + 1) + '-' + std::to_string(_time->tm_mday) + ' ' + hour + ':' + min + ':' + sec;
-			}
-			else {
-				time_str += "XXXX-X-X XX:XX:XX";
-			}
-			std::string msg = "$3$S" + time_str + "$r$1 [ERROR]$r " + __msg + "\n";
-			if (!t->color) {
-				for (size_t i = 0; i < msg.size(); i++) {
-					if (msg[i] == '$' && ((i != 0 && msg[i - 1] != '\\') || i == 0)) {
-						msg.erase(msg.begin() + i, msg.begin() + i + 2);
-						i--;
-					}
-				}
-			}
+			std::string msg = "$3$S" + time_format() + "$1 [ERROR]$r " + __msg + "\n";
+			if (!t->color) no_color(msg);
 			nux::fmt::print(msg);
 		}
+
 		void warning(std::string __msg) {
 			std::lock_guard<std::mutex> lock(LogMutex);
-			time_t __time = time(nullptr);
-			tm *_time = localtime(&__time);
-			std::string time_str;
-			if (_time) {
-				std::string sec = std::to_string(_time->tm_sec),
-							min = std::to_string(_time->tm_min),
-							hour = std::to_string(_time->tm_hour);
-				if (sec.length() == 1) sec.insert(sec.begin(), '0');
-				if (min.length() == 1) min.insert(min.begin(), '0');
-				if (hour.length() == 1) hour.insert(hour.begin(), '0');
-				time_str += std::to_string(_time->tm_year + 1900) + '-' + std::to_string(_time->tm_mon + 1) + '-' + std::to_string(_time->tm_mday) + ' ' + hour + ':' + min + ':' + sec;
-			}
-			else {
-				time_str += "XXXX-X-X XX:XX:XX";
-			}
-			std::string msg = "$3$S" + time_str + "$r$5 [WARNING]$r " + __msg + "\n";
-			if (!t->color) {
-				for (size_t i = 0; i < msg.size(); i++) {
-					if (msg[i] == '$' && ((i != 0 && msg[i - 1] != '\\') || i == 0)) {
-						msg.erase(msg.begin() + i, msg.begin() + i + 2);
-						i--;
-					}
-				}
-			}
+			std::lock_guard<std::mutex> lock(LogMutex);
+			std::string msg = "$3$S" + time_format() + "$5 [WARNING]$r " + __msg + "\n";
+			if (!t->color) no_color(msg);
 			nux::fmt::print(msg);
 		}
 	}
