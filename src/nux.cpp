@@ -21,6 +21,7 @@
 	#include <stddef.h>
 	#include <alloca.h>
 	#include <immintrin.h>
+	#include <netdb.h>
 
 	// Include Thrid-Party Library
 	// get more information: `include/README.md`!
@@ -35,8 +36,8 @@
 	typedef struct stat status;
 	typedef unsigned char byte;
 
+	// `sfs` 是 `std::filesystem` 的缩写 (I can't speak English well)
 	namespace sfs = std::filesystem;
-	// `sfs` 是 Std::FileSystem 的缩写 (I can't speak English well)
 
 	using namespace nlohmann;
 
@@ -79,6 +80,10 @@
 		nux::log::error((std::string)"Server failed because " + msg);\
 	}
 
+	#define CLIENT_SERVER_PROTOCOL_VERSION_NOT_MATCH_FAIL() {\
+		nux::log::error((std::string)"Server failed because client's and server's protocol version don't match");\
+	}
+
 	// Bedrock RakNet Marco
 	#define ID_UNCONNECTED_PING 0x1
 	#define ID_UNCONNECTED_PING_OPEN_CONNECTIONS 0x2
@@ -107,6 +112,7 @@
 		bool LoadPlugin = false;
 		bool werr = false;
 		bool ipv6 = false;
+		bool security = false;
 		std::string plugins_path;
 		std::string data_path;
 		std::string ServerRootDir = getcwd(nullptr, 0);
@@ -442,7 +448,7 @@
 
 		void debug(std::string __msg) {
 			std::lock_guard<std::mutex> lock(LogMutex);
-			std::string msg = "$3$S" + time_format() + "$6 [DUBUG]$r " + __msg + "\n";
+			std::string msg = "$3$S" + time_format() + "$6 [DE2BUG]$r " + __msg + "\n";
 			if (!t->color) no_color(msg);
 			nux::fmt::print(msg);
 		}
@@ -506,6 +512,8 @@
 				void* ptr = nullptr;
 				size_t len = 1024;
 				size_t used = 0;
+				bool trust = true;
+				bool child = false;
 
 				public:
 				Pool(size_t N) : len(N) {
@@ -517,11 +525,13 @@
 					this->ptr = malloc(this->len);
 				}
 
+				Pool(void* __ptr, size_t __len) : ptr(__ptr), len(__len), child(true) {}
+
 				Pool(const Pool&) = delete;
 				Pool& operator=(const Pool&) = delete;
 
 				void* allocate(size_t __size) {
-					// you can go to https://github.com/bzjsmdl/Nux/blob/main/src/nux.cpp#L559 if you want to know why i write `__size > this->len - this->used`
+					// you can go to https://github.com/bzjsmdl/Nux/blob/main/src/nux.cpp#L566 if you want to know why i write `__size > this->len - this->used`
 					if (__size > this->len - this->used) return nullptr;
 					void* ret = (char*)this->ptr + this->used;
 					this->used += __size;
@@ -529,6 +539,7 @@
 				}
 
 				void* data() {
+					this->trust = false;
 					return this->ptr;
 				}
 
@@ -537,11 +548,11 @@
 				}
 
 				void clear() {
-					memset(this->ptr, 0, this->used);
+					memset(this->ptr, 0, (this->trust) ? this->used : this->len);
 				}
 
 				~Pool() {
-					free(ptr);
+					if (!child) free(ptr);
 				}
 		};
 	}
@@ -611,6 +622,11 @@
 			unsigned long long int tickcnt = 0;
 			volatile std::atomic<bool> running {false};
 			size_t player_cnt = 0;
+			byte ProtocolVersion = 0;
+			uint32_t ServerIP = 0;
+
+			size_t size = MB(32);
+			nux::Pool buffer = nux::Pool(size);
 
 			void run() {
 				while (this->running) {
@@ -687,8 +703,7 @@
 				else {
 					nux::log::info("Try to read file " +  config_file);
 					size_t len = nux::fs::flen(hd_config);
-					nux::Pool LocalPool(MB(8));
-					char* text = (char*)LocalPool.allocate(len + 1); text[len] = 0;
+					char* text = (char*)buffer.allocate(len + 1); text[len] = 0;
 					// I think this function don't check return value because I want to fast finish it.
 					fread(text, 1, len, hd_config);
 					// but writing a comment is best in here
@@ -712,7 +727,6 @@
 						if (config.contains(options[i])) {
 							std::string key = options[i];
 							if (key == "gamemode" && config[key].is_number_integer()) {
-
 								switch ((int)config[key]) {
 									case 0: this->data[i] = "survival"; break;
 									case 1: this->data[i] = "creative"; break;
@@ -825,11 +839,11 @@
 			// 0. initial
 
 			// create an arena of this thread
-			size_t size = MB(8);
-			nux::Pool buffer = nux::Pool(size);
-			byte* ptr = (byte*)buffer.data();
+			size_t localsize = MB(8);
+			nux::Pool localbuffer = nux::Pool((byte*)buffer.allocate(localsize) + MB(4), localsize);
+			byte* ptr = (byte*)localbuffer.data();
 
-			sockaddr client_in; socklen_t clen = sizeof(client_in);
+			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
 
 			// clear `errno`
 			errno = 0;
@@ -840,27 +854,36 @@
 			nux::log::info("Server has created a UDP socket");
 
 			// 2. bind a fixed port
-			sockaddr_in addr;
-			addr.sin_family = (t->ipv6) ? AF_INET6 : AF_INET;
-			addr.sin_port = htons((t->ipv6) ? data.server_portv6 : data.server_port);
-			addr.sin_addr.s_addr = htonl(INADDR_ANY);
-			if (bind(listenfd, (const sockaddr*)&addr, sizeof(addr)) == -1) goto err;
+			client_in.sin_family = (t->ipv6) ? AF_INET6 : AF_INET;
+			client_in.sin_port = htons((t->ipv6) ? data.server_portv6 : data.server_port);
+			client_in.sin_addr.s_addr = htonl(INADDR_ANY);
+			if (bind(listenfd, (const sockaddr*)&client_in, clen) == -1) goto err;
 			nux::log::info("Server has successfully bound port " + std::to_string(((t->ipv6) ? data.server_portv6 : data.server_port)));
-
+			
 			nux::log::info("Try to build connection with client");
 			// 3. build connection with client
-			{
-				doUnconnectedPong:
-				// 3.1. Receive Unconnected Ping
-				ssize_t n = recvfrom(listenfd, ptr, size, 0, &client_in, &clen);
+			build_connect: {
+				// Receive Client Data
+				ssize_t n = recvfrom(listenfd, ptr, size, 0, (sockaddr*)&client_in, &clen);
 				nux::fmt::show_bytes(ptr, n);
 				if (n == -1) goto err;
 
 				switch (ptr[0]) {
+					case 0x00: {	// I don't know it can run here, or cannot run here
+						// Receive Connected Ping and Send Connected Pong
+						uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+							std::chrono::system_clock::now().time_since_epoch()
+						).count();
+						*(uint64_t*)(ptr + 9) = now;
+						ptr[0] = 0x03;
+						n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
+						if (n == -1) goto err;
+						goto build_connect;
+					}
 					case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
 						if (this->GetPlayerCount() >= data.max_players) break;
 					case ID_UNCONNECTED_PING: {
-						// 3.2. Build an Unconnected Pong
+						// Build an Unconnected Pong
 						ptr[0] = 0x1c;
 						*(uint64_t*)(ptr + 1) = server_guid;
 						memcpy(ptr + 9, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16);
@@ -879,7 +902,7 @@
 							default:
 								gmnum = -1; 
 						}
-						
+							
 						std::string server_id_str = "MCPE;";
 						uint16_t slen = server_id_str.length();
 						server_id_str += data.server_name + ";" + "766;1.21.50;" + std::to_string(this->GetPlayerCount()) +\
@@ -889,30 +912,44 @@
 						*(uint16_t*)(ptr + 25) = htons(slen);
 						strcpy((char*)ptr + 27, server_id_str.c_str());
 
-						// 3.3. Send to client
-						n = sendto(listenfd, ptr, 27 + slen, 0, &client_in, clen);
-						if (n == -1)  goto err;
+						// Send to client
+						n = sendto(listenfd, ptr, 27 + slen, 0, (sockaddr*)&client_in, clen);
+						if (n == -1) goto err;
 						break;
 					}
-					default: goto doUnconnectedPong;  // try again if can't receive Unconnected Ping
+					case 0x05: {
+						static uint16_t mtu = n;
+						static bool is_cookie = false;
+						ptr[0]++;
+						this->ProtocolVersion = ptr[17];
+						*(uint64_t*)(ptr + 17) = this->server_guid;
+						ptr[25] = t->security;
+						size_t mtu_fbase = 26;
+						if (ptr[25]) {
+							*(int*)(ptr + mtu_fbase) = nux::math::randint();
+							mtu_fbase += 4;
+							is_cookie = true;
+						}
+						*(uint16_t*)(ptr + mtu_fbase) = mtu;
+						n = sendto(listenfd, ptr, (ptr[25] ? 31 : 27), 0, (struct sockaddr*)&client_in, clen);
+						if (n == -1) goto err;
+						break;
+					}
+					case 0x07: {
+						printf("Here\n");
+						break;
+					}
+					case 0x19: {
+						if (memcmp(ptr + 2, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16) == 0 && *(uint64_t*)(ptr + 18) == this->server_guid) {
+							CLIENT_SERVER_PROTOCOL_VERSION_NOT_MATCH_FAIL();
+							goto err;
+						}
+						break;
+					}
+					default: break;
 				}
-
-				// 3.4. Receive Connected Ping
-				n = recvfrom(listenfd, ptr, size, 0, &client_in, &clen);
-				nux::fmt::show_bytes(ptr, n);
-				if (n == -1) goto err;
-				// 3.4. Receive Connected Ping
-				if (ptr[0] == 0x00) {
-					uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-						std::chrono::system_clock::now().time_since_epoch()
-					).count();
-					*(uint64_t*)(ptr + 8) = now;
-					n = sendto(listenfd, ptr, 9, 0, &client_in, clen);
-					if (n == -1) if (n == -1) goto err;
-				}
-				while (true) sleep(30);
+				goto build_connect;
 			}
-			
 
 			return false;
 			err:
@@ -932,6 +969,7 @@ int main(int argc, const char** argv) {
 		else if (strequ("-debug", argv[i])) t->debug = true;
 		else if (strequ("-werr", argv[i])) t->werr = true;
 		else if (strequ("-ipv6", argv[i])) t->ipv6 = true;
+		else if (strequ(argv[i], "-security")) t->security = true;
 		else if (strequ("-v", argv[i]) || strequ("--version", argv[i])) printf("Nux Version - alpha 1.0.0\n");
 	}
 	Server server = Server();
