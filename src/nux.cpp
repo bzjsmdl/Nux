@@ -443,7 +443,6 @@
 
 		void warning(std::string __msg) {
 			std::lock_guard<std::mutex> lock(LogMutex);
-			std::lock_guard<std::mutex> lock(LogMutex);
 			std::string msg = "$3$S" + time_format() + "$5 [WARNING]$r " + __msg + "\n";
 			if (!t->color) no_color(msg);
 			nux::fmt::print(msg);
