@@ -901,6 +901,7 @@
 				n = recvfrom(listenfd, ptr, size, 0, &client_in, &clen);
 				nux::fmt::show_bytes(ptr, n);
 				if (n == -1) goto err;
+				// 3.4. Receive Connected Ping
 				if (ptr[0] == 0x00) {
 					uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
 						std::chrono::system_clock::now().time_since_epoch()
