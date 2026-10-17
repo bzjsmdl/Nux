@@ -3,7 +3,7 @@
 #endif
 // 					Nux - A Minecraft Bedrock Server
 //				  (This's really a big big big updating)
-//							LICENSE: AGPL
+//							LICENSE: AGPL 
 // ======================================================================
 // |				PART 1			Include Libraries					|
 // ======================================================================
@@ -28,6 +28,7 @@
 	#include "include/zlib.h"
 	#include "include/json.hpp"
 
+
 // ======================================================================
 // |				PART 2			Some Marcos							|
 // ======================================================================
@@ -49,7 +50,7 @@
 	#define DEFAULT_CONFIG_SIZE 2213
 
 	// Visibility Flag Macro
-	// they are only "tip"
+	// they are only "tip" in namepspace
 	#define pub
 	#define priv
 	#define prot
@@ -78,9 +79,28 @@
 		nux::log::error((std::string)"Server failed because " + msg);\
 	}
 
+	// Bedrock RakNet Marco
+	#define ID_UNCONNECTED_PING 0x1
+	#define ID_UNCONNECTED_PING_OPEN_CONNECTIONS 0x2
+
+// ======================================================================
+// |				PART 2			Constants							|
+// ======================================================================
+	const byte BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID[16] = {0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78}; 
+
 // ======================================================================
 // |				PART 3		Some Structions							|
 // ======================================================================
+	struct Event {
+		enum {
+			Nothing
+		} EventType;
+		enum {
+			OldMicrosoftBedrockMinecraft,	// RakNet
+			NewMicrosoftBedrockMinecraft,	// NetherNet
+			NeteaseBedrockMinecraft
+		} ClientVersion;
+	};
 	typedef struct NuxTable {
 		bool debug = false;
 		bool color = isatty(fileno(stdout));
@@ -450,7 +470,7 @@
 	}
 
 	namespace nux::math {
-		inline size_t randint(size_t min = 0, size_t max = (size_t)-1) {
+		inline uint64_t randint(uint64_t min = 0, uint64_t max = (uint64_t)-1) {
 			std::random_device rd;
 			std::mt19937_64 gen(rd());
 			std::uniform_int_distribution<> dis(min, max);
@@ -501,7 +521,7 @@
 				Pool& operator=(const Pool&) = delete;
 
 				void* allocate(size_t __size) {
-					// yoiu can go to https://github.com/bzjsmdl/Nux/blob/main/src/include/rt/reader.hpp#L17 if you want to know why i write `__size > this->len - this->used`
+					// you can go to https://github.com/bzjsmdl/Nux/blob/main/src/nux.cpp#L559 if you want to know why i write `__size > this->len - this->used`
 					if (__size > this->len - this->used) return nullptr;
 					void* ret = (char*)this->ptr + this->used;
 					this->used += __size;
@@ -516,13 +536,16 @@
 					return this->len;
 				}
 
+				void clear() {
+					memset(this->ptr, 0, this->used);
+				}
+
 				~Pool() {
 					free(ptr);
 				}
-			};
+		};
 	}
 	
-
 	// # don't use it currently
 	// namespace nux {
 	// 	class Reader {
@@ -573,256 +596,329 @@
 	// 				}
 	// 		};
 	// }
-	
+		
 // ======================================================================
 // |				PART 6			Server								|
 // ======================================================================
-class Server {
-	private:
-		// static member
-		static std::mutex ServerMutex;
+	class Server {
+		private:
+			// static member
+			static std::mutex ServerMutex;
 
-		bool error = false;		// Running Error
-		size_t server_guid = nux::math::randint();
-		unsigned long long int tickcnt = 0;
+			bool error = false;		// Running Error
+			uint64_t server_guid = nux::math::randint();
+			ServerProperties data;
+			unsigned long long int tickcnt = 0;
+			volatile std::atomic<bool> running {false};
+			size_t player_cnt = 0;
 
-		volatile std::atomic<bool> running {false};
-		ServerProperties data;
-
-		void run() {
-			while (this->running) {
-				auto next_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
-				this->tick();
-				std::this_thread::sleep_until(next_time);
+			void run() {
+				while (this->running) {
+					auto next_time = std::chrono::system_clock::now() + std::chrono::milliseconds(50);
+					this->tick();
+					std::this_thread::sleep_until(next_time);
+				}
+				
 			}
-			
-		}
 
-		void tick() {
-			tickcnt++;
-			nux::log::info("tick: " + std::to_string(tickcnt));
-		}
-
-		void LoadPlugins() {
-			if (t->LoadPlugin) {
-				this->EnsureDirExists(t->plugins_path);
+			void tick() {
+				tickcnt++;
+				nux::log::info("tick: " + std::to_string(tickcnt));
 			}
-		}
 
-		bool InitNetwork() {
+			void LoadPlugins() {
+				if (t->LoadPlugin) {
+					this->EnsureDirExists(t->plugins_path);
+				}
+			}
+
+			void InitNetwork() {
+				this->error = BedrockRakNet();
+			}
+
+			void InitWorlds() {
+				std::string worlds_path = t->data_path + "worlds/",\
+							player_path = t->data_path + "players/";
+
+				this->EnsureDirExists(worlds_path);
+				this->EnsureDirExists(player_path);
+			}
+
+			void LoadConfig() {
+				std::string config_file = t->data_path + "server.json";
+				
+				this->EnsureDirExists(t->data_path);
+
+				json config; FILE* hd_config = nullptr;
+				if (!nux::fs::exists(config_file)) {
+					hd_config = fopen(config_file.c_str(), "wb");
+					if (errno != 0 && hd_config == nullptr) {
+						nux::log::error("Failed to create file " + config_file + ". Because " + (std::string)strerror(errno));
+						this->error = true;	return;
+					}
+					nux::log::info("Successfully create file " +  config_file);
+				}
+				else {
+					hd_config = fopen(config_file.c_str(), "rb");
+					if (errno != 0 && hd_config == nullptr) {
+						nux::log::error("Failed to open file " + config_file + ". Because " + (std::string)strerror(errno));
+						this->error = true;	return;
+					}
+					nux::log::info("Successfully open file " +  config_file);
+				}
+				if (sfs::is_empty(config_file)) {
+					nux::log::info("Try to write default config into " +  config_file);
+					size_t ret = fwrite(DEFAULT_CONFIG_CONTENT, 1, DEFAULT_CONFIG_SIZE, hd_config);
+					if (ret != DEFAULT_CONFIG_SIZE) {
+						if (ferror(hd_config)) CONFIG_PARSE_FAIL("CRT: " + (std::string)(strerror(errno)))
+						else CONFIG_PARSE_FAIL("Expected " + std::to_string(DEFAULT_CONFIG_SIZE) + " elements, but got " + std::to_string(ret) + " elements")
+						this->error = true; return;
+					}
+					
+					// parse file
+					try {
+						config = json::parse((std::string)DEFAULT_CONFIG_CONTENT);
+					}
+					catch (const std::exception& e) {
+						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
+						this->error = true; return;
+					}
+				}
+				else {
+					nux::log::info("Try to read file " +  config_file);
+					size_t len = nux::fs::flen(hd_config);
+					nux::Pool LocalPool(MB(8));
+					char* text = (char*)LocalPool.allocate(len + 1); text[len] = 0;
+					// I think this function don't check return value because I want to fast finish it.
+					fread(text, 1, len, hd_config);
+					// but writing a comment is best in here
+					// 是的是的
+
+					// parse file
+					try {
+						config = json::parse((std::string)text);
+					}
+					catch (const std::exception& e) {
+						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
+						this->error = true; return;
+					}
+				}
+				fclose(hd_config);
+				nux::log::info("Finish parsing config file");
+
+				// load into memory
+				for (size_t i = 0; i < options.size() && !config.empty(); i++) {
+					try {
+						if (config.contains(options[i])) {
+							std::string key = options[i];
+							if (key == "gamemode" && config[key].is_number_integer()) {
+
+								switch ((int)config[key]) {
+									case 0: this->data[i] = "survival"; break;
+									case 1: this->data[i] = "creative"; break;
+									case 2: this->data[i] = "adventure"; break;
+									case 5: this->data[i] = "default"; break;
+									default: {
+										if (t->werr) {
+											CONFIG_PARSE_FAIL("`gamemode` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 5)");
+											this->error = true; return;
+										}
+										else CONFIG_PARSE_WARN("`gamemode` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 5)\nserver used the default value \"survival\"(0)");
+									}
+								}
+							}
+							else if (key == "difficulty" && config[key].is_number_integer()) {
+								switch ((int)config[key]) {
+									case 0: this->data[i] = "peaceful"; break;
+									case 1: this->data[i] = "easy"; break;
+									case 2: this->data[i] = "normal"; break;
+									case 3: this->data[i] = "hard"; break;
+									default: {
+										if (t->werr) {
+											CONFIG_PARSE_FAIL("`difficulty` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 3)");
+											this->error = true; return;
+										}
+										else CONFIG_PARSE_WARN("`difficulty` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 3)\nserver used the default value \"easy\"(1)");
+									}
+								}
+							}
+							else if (key == "server-build-radius-ratio" && config[key].is_number_float()) {
+								this->data.server_build_radius_ratio = std::to_string((float)config[key]);
+							}
+							else if (config[key].is_null()) {
+								CONFIG_PARSE_FAIL(key + "'s value from null is not valid");
+								this->error = true; return;
+							}
+							else this->data[i] = config[key];
+						}
+					}
+					catch (const std::exception& e) {
+						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
+						this->error = true; return;
+					}	
+				}
+			}
+
+			bool EnsureDirExists(const std::string& path) {
+				if (!nux::fs::exists(path)) {
+					errno = 0;
+					mkdirat(AT_FDCWD, path.c_str(), S_IRWXU);
+					if (errno != 0) {
+						nux::log::error("Failed to create directory " + path + ". Because " + (std::string)strerror(errno));
+						this->error = true; return false;
+					}
+					nux::log::info("Successfully create directory " + path);
+				}
+				return true;
+			}
+		public:
+			Server() {
+				nux::log::info("Server started");
+				{
+					std::thread t1(&Server::LoadConfig, this);
+					std::thread t2(&Server::LoadPlugins, this);
+					t1.join(); t2.join();
+				}
+				
+
+				if (this->error) goto end;
+				// InitWorlds();
+				
+				{
+					this->running = true;
+					std::thread t1(&Server::run, this);
+					std::thread t2(&Server::InitNetwork, this);
+					t1.join(); t2.join();
+				}
+				
+
+				end:
+					nux::log::info("Server shut down");
+			}
+
+			inline const ServerProperties GetServerProperties() {
+				return this->data;
+			}
+
+			inline uint64_t GetServerGuid() {
+				return this->server_guid;
+			}
+
+			inline bool GetError() {
+				return this->error;
+			}
+
+			inline void stop() {
+				this->running = false;
+			}
+
+			inline size_t GetPlayerCount() {
+				return this->player_cnt;
+			}
+
+// ======================================================================
+// |				PART 7			Network								|
+// ======================================================================
+		private:
+		std::queue<Event> event_queue;
+		bool BedrockRakNet() {
+			// 0. initial
+
+			// create an arena of this thread
+			size_t size = MB(8);
+			nux::Pool buffer = nux::Pool(size);
+			byte* ptr = (byte*)buffer.data();
+
+			sockaddr client_in; socklen_t clen = sizeof(client_in);
+
 			// clear `errno`
 			errno = 0;
-
+			
 			// 1. create a UDP socket
 			int listenfd = socket((t->ipv6) ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
 			if (listenfd == -1) goto err;
+			nux::log::info("Server has created a UDP socket");
 
 			// 2. bind a fixed port
 			sockaddr_in addr;
-			addr.sin_family = AF_INET;
-			addr.sin_port = htons((t->ipv6) ? this->data.server_portv6 : this->data.server_port);
+			addr.sin_family = (t->ipv6) ? AF_INET6 : AF_INET;
+			addr.sin_port = htons((t->ipv6) ? data.server_portv6 : data.server_port);
 			addr.sin_addr.s_addr = htonl(INADDR_ANY);
 			if (bind(listenfd, (const sockaddr*)&addr, sizeof(addr)) == -1) goto err;
+			nux::log::info("Server has successfully bound port " + std::to_string(((t->ipv6) ? data.server_portv6 : data.server_port)));
 
-			// 3. ...
+			nux::log::info("Try to build connection with client");
+			// 3. build connection with client
 			{
-				size_t size = MB(8);
-				nux::Pool buf(size);
-				byte* ptr = (byte*)buf.data();
-				while (true) {
-					sockaddr client_in; socklen_t clen = sizeof(client_in);
-					ssize_t n = recvfrom(listenfd, ptr, size, 0, &client_in, &clen);
-					if (ptr[0] == 0x1) {
-						printf("content: ");
-						nux::fmt::show_bytes(ptr, n);
-						printf("\n");
-						sleep(15);
+				doUnconnectedPong:
+				// 3.1. Receive Unconnected Ping
+				ssize_t n = recvfrom(listenfd, ptr, size, 0, &client_in, &clen);
+				nux::fmt::show_bytes(ptr, n);
+				if (n == -1) goto err;
 
+				switch (ptr[0]) {
+					case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
+						if (this->GetPlayerCount() >= data.max_players) break;
+					case ID_UNCONNECTED_PING: {
+						// 3.2. Build an Unconnected Pong
 						ptr[0] = 0x1c;
-						*(size_t*)(ptr + 9) = this->server_guid;
-						std::string motd =\
-							(std::string)"MCPE;" + this->data.server_name + ";527;1.21.1;0;10;" +\
-							std::to_string(this->server_guid) + (std::string)";Bedrock level;Survival;1;19132;19133;";
-						*(uint16_t*)(ptr + 33) = (uint16_t)htonl(motd.length());
-						strcpy((char*)ptr + 35, motd.c_str());
-						sendto(listenfd, ptr, 35 + motd.length(), 0, &client_in, clen);
-						printf("Yes!!!Can Run!!!\n");
-					}
-				}
-			}
+						*(uint64_t*)(ptr + 1) = server_guid;
+						memcpy(ptr + 9, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16);
 
-			return true;
+						std::string cpy = data.gamemode;
+						cpy[0] |= 0x20;
+						int gmnum = 0;
+						switch (cpy[0]) {
+							case 'A':
+								gmnum++;
+							case 'C':
+								gmnum++;
+								break;
+							case 'S':
+								if (cpy[1] == 'u') break;
+							default:
+								gmnum = -1; 
+						}
+						
+						std::string server_id_str = "MCPE;";
+						uint16_t slen = server_id_str.length();
+						server_id_str += data.server_name + ";" + "766;1.21.50;" + std::to_string(this->GetPlayerCount()) +\
+										 ";" + std::to_string(data.max_players) + ";" + std::to_string(server_guid) + ";" +\
+										 data.level_name + ";" + data.gamemode + ";" + ((gmnum == -1) ? "" : std::to_string(gmnum)) +\
+										 std::to_string(data.server_port) + ";" + std::to_string(data.server_portv6);
+						*(uint16_t*)(ptr + 25) = htons(slen);
+						strcpy((char*)ptr + 27, server_id_str.c_str());
+
+						// 3.3. Send to client
+						n = sendto(listenfd, ptr, 27 + slen, 0, &client_in, clen);
+						if (n == -1)  goto err;
+						break;
+					}
+					default: goto doUnconnectedPong;  // try again if can't receive Unconnected Ping
+				}
+
+				// 3.4. Receive Connected Ping
+				n = recvfrom(listenfd, ptr, size, 0, &client_in, &clen);
+				nux::fmt::show_bytes(ptr, n);
+				if (n == -1) goto err;
+				if (ptr[0] == 0x00) {
+					uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+						std::chrono::system_clock::now().time_since_epoch()
+					).count();
+					*(uint64_t*)(ptr + 8) = now;
+					n = sendto(listenfd, ptr, 9, 0, &client_in, clen);
+					if (n == -1) if (n == -1) goto err;
+				}
+				while (true) sleep(30);
+			}
+			
+
+			return false;
 			err:
 				CPPRT_THROW_EXCEPTION_FAIL("\"" + strerror(errno) + "\"");
-				return false;
+				return true;
 		}
-
-		void InitWorlds() {
-			std::string worlds_path = t->data_path + "worlds/",\
-						player_path = t->data_path + "players/";
-
-			this->EnsureDirExists(worlds_path);
-			this->EnsureDirExists(player_path);
-		}
-
-		void LoadConfig() {
-			std::string config_file = t->data_path + "server.json";
-			
-			this->EnsureDirExists(t->data_path);
-
-			json config; FILE* hd_config = nullptr;
-			if (!nux::fs::exists(config_file)) {
-				hd_config = fopen(config_file.c_str(), "wb");
-				if (errno != 0 && hd_config == nullptr) {
-					nux::log::error("Failed to create file " + config_file + ". Because " + (std::string)strerror(errno));
-					this->error = true;	return;
-				}
-				nux::log::info("Successfully create file " +  config_file);
-			}
-			else {
-				hd_config = fopen(config_file.c_str(), "rb");
-				if (errno != 0 && hd_config == nullptr) {
-					nux::log::error("Failed to open file " + config_file + ". Because " + (std::string)strerror(errno));
-					this->error = true;	return;
-				}
-				nux::log::info("Successfully open file " +  config_file);
-			}
-			if (sfs::is_empty(config_file)) {
-				nux::log::info("Try to write default config into " +  config_file);
-				size_t ret = fwrite(DEFAULT_CONFIG_CONTENT, 1, DEFAULT_CONFIG_SIZE, hd_config);
-				if (ret != DEFAULT_CONFIG_SIZE) {
-					if (ferror(hd_config)) CONFIG_PARSE_FAIL("CRT: " + (std::string)(strerror(errno)))
-					else CONFIG_PARSE_FAIL("Expected " + std::to_string(DEFAULT_CONFIG_SIZE) + " elements, but got " + std::to_string(ret) + " elements")
-					this->error = true; return;
-				}
-				
-				// parse file
-				try {
-					config = json::parse((std::string)DEFAULT_CONFIG_CONTENT);
-				}
-				catch (const std::exception& e) {
-					CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
-					this->error = true; return;
-				}
-			}
-			else {
-				nux::log::info("Try to read file " +  config_file);
-				size_t len = nux::fs::flen(hd_config);
-				nux::Pool LocalPool(MB(8));
-				char* text = (char*)LocalPool.allocate(len + 1); text[len] = 0;
-				// I think this function don't check return value because I want to fast finish it.
-				fread(text, 1, len, hd_config);
-				// but writing a comment is best in here
-				// 是的是的
-
-				// parse file
-				try {
-					config = json::parse((std::string)text);
-				}
-				catch (const std::exception& e) {
-					CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
-					this->error = true; return;
-				}
-			}
-			fclose(hd_config);
-			nux::log::info("Finish parsing config file");
-
-			// load into memory
-			for (size_t i = 0; i < options.size() && !config.empty(); i++) {
-				try {
-					if (config.contains(options[i])) {
-						std::string key = options[i];
-						if (key == "gamemode" && config[key].is_number_integer()) {
-							switch ((int)config[key]) {
-								case 0: this->data[i] = "survival"; break;
-								case 1: this->data[i] = "creative"; break;
-								case 2: this->data[i] = "adventure"; break;
-								case 5: this->data[i] = "default"; break;
-								default: {
-									if (t->werr) {
-										CONFIG_PARSE_FAIL("`gamemode` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 5)");
-										this->error = true; return;
-									}
-									else CONFIG_PARSE_WARN("`gamemode` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 5)\nserver used the default value \"survival\"(0)");
-								}
-							}
-						}
-						else if (key == "difficulty" && config[key].is_number_integer()) {
-							switch ((int)config[key]) {
-								case 0: this->data[i] = "peaceful"; break;
-								case 1: this->data[i] = "easy"; break;
-								case 2: this->data[i] = "normal"; break;
-								case 3: this->data[i] = "hard"; break;
-								default: {
-									if (t->werr) {
-										CONFIG_PARSE_FAIL("`difficulty` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 3)");
-										this->error = true; return;
-									}
-									else CONFIG_PARSE_WARN("`difficulty` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 3)\nserver used the default value \"easy\"(1)");
-								}
-							}
-						}
-						else if (key == "server-build-radius-ratio" && config[key].is_number_float()) {
-							this->data.server_build_radius_ratio = std::to_string((float)config[key]);
-						}
-						else if (config[key].is_null()) {
-							CONFIG_PARSE_FAIL(key + "'s value from null is not valid");
-							this->error = true; return;
-						}
-						else this->data[i] = config[key];
-					}
-				}
-				catch (const std::exception& e) {
-					CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
-					this->error = true; return;
-				}	
-			}
-		}
-
-		bool EnsureDirExists(const std::string& path) {
-			if (!nux::fs::exists(path)) {
-				errno = 0;
-				mkdirat(AT_FDCWD, path.c_str(), S_IRWXU);
-				if (errno != 0) {
-					nux::log::error("Failed to create directory " + path + ". Because " + (std::string)strerror(errno));
-					this->error = true; return false;
-				}
-				nux::log::info("Successfully create directory " + path);
-			}
-			return true;
-		}
-	public:
-		Server() {
-			nux::log::info("Server started");
-			{
-				std::thread t1(&Server::LoadConfig, this);
-				std::thread t2(&Server::LoadPlugins, this);
-				t1.join(); t2.join();
-			}
-			
-
-			if (this->error) goto end;
-			// InitWorlds();
-			// InitNetwork();
-			{
-				this->running = true;
-				std::thread t1(&Server::run, this);
-				t1.join();
-			}
-			
-
-			end:
-				nux::log::info("Server shut down");
-		}
-
-		inline bool GetError() {
-			return this->error;
-		}
-
-		inline void stop() {
-			this->running = false;
-		}
-};
+	};
 
 // ======================================================================
 // |				THE LAST PART		Nux Server Entry				|
