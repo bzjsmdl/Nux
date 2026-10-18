@@ -100,14 +100,17 @@
 // |				PART 3		Some Structions							|
 // ======================================================================
 	struct Event {
-		enum {
-			Nothing
-		} EventType;
-		enum {
-			OldMicrosoftBedrockMinecraft,	// RakNet
-			NewMicrosoftBedrockMinecraft,	// NetherNet
+		enum Type {
+			SendAck,
+			SendNack
+		} type;
+		enum ClientVersion {
+			OldBedrockMinecraft,	// RakNet
+			NewBedrockMinecraft,	// NetherNet
 			NeteaseBedrockMinecraft
-		} ClientVersion;
+		} clientVersion;
+		byte* RawPacket;
+		size_t RawPacketSize;
 	};
 	typedef struct NuxTable {
 		bool debug = false;
@@ -287,6 +290,17 @@
 	Table* t = nullptr;
 
 	constexpr std::array<const char*, 70> options = {"server-name", "gamemode", "force-gamemode", "difficulty", "allow-cheats", "max-players", "online-mode", "allow-list", "server-port", "server-portv6", "enable-lan-visibility", "view-distance", "tick-distance", "player-idle-timeout", "allow-player-joining", "max-threads", "level-name", "level-seed", "default-player-permission-level", "texturepack-required", "content-log-file-enabled", "content-log-console-output-enabled", "content-log-level", "compression-threshold", "compression-algorithm", "server-authoritative-movement-strict", "server-authoritative-dismount-strict", "server-authoritative-entity-interactions-strict", "player-position-acceptance-threshold", "player-movement-action-direction-threshold", "server-authoritative-block-breaking-pick-range-scalar", "chat-restriction", "disable-player-interaction", "client-side-chunk-generation-enabled", "block-network-ids-are-hashes", "disable-persona", "disable-custom-skins", "server-build-radius-ratio", "allow-outbound-script-debugging", "allow-inbound-script-debugging", "force-inbound-debug-port", "script-debugger-auto-attach", "script-debugger-auto-attach-connect-address", "script-debugger-auto-attach-timeout", "script-debugger-passcode", "script-watchdog-enable", "script-watchdog-enable-exception-handling", "script-watchdog-enable-shutdown", "script-watchdog-hang-exception", "script-watchdog-hang-threshold", "script-watchdog-spike-threshold", "script-watchdog-slow-threshold", "script-watchdog-memory-warning", "script-watchdog-memory-limit", "diagnostics-capture-auto-start", "diagnostics-capture-max-files", "diagnostics-capture-max-file-size", "disable-client-vibrant-visuals", "sentry-rate-limit-window", "sentry-max-events-per-window", "enable-profiler", "enable-editor-network-metrics", "level-type", "server-authoritative-block-breaking", "emit-server-telemetry", "isHardcore", "language", "op-permission-level", "netease-support", "only-netease"};
+
+	enum ReliabilityType {
+		Unreliable,
+		UnreliableSequenced,
+		Reliable,	
+		ReliableOrdered,
+		ReliableSequenced,
+		UnreliableAndAckReceipt,
+		ReliableAndAckReceipt,
+		ReliableOrderedAndAckReceipt,
+	};
 
 // ======================================================================
 // |				PART 5			Utils Function						|
@@ -515,7 +529,7 @@
 				private:
 				void* ptr = nullptr;
 				size_t len = 1024;
-				size_t used = 0;
+				size_t _used = 0;
 				bool trust = true;
 				bool child = false;
 
@@ -535,10 +549,10 @@
 				Pool& operator=(const Pool&) = delete;
 
 				void* allocate(size_t __size) {
-					// you can go to https://github.com/bzjsmdl/Nux/blob/main/src/nux.cpp#L566 if you want to know why i write `__size > this->len - this->used`
-					if (__size > this->len - this->used) return nullptr;
-					void* ret = (char*)this->ptr + this->used;
-					this->used += __size;
+					// you can go to https://github.com/bzjsmdl/Nux/blob/main/src/nux.cpp#L594 if you want to know why i write `__size > this->len - this->used`
+					if (__size > this->len - this->_used) return nullptr;
+					void* ret = (char*)this->ptr + this->_used;
+					this->_used += __size;
 					return ret;
 				}
 
@@ -547,12 +561,18 @@
 					return this->ptr;
 				}
 
-				size_t size() {
-					return this->len;
-				}
+				size_t size() { return this->len; }
+				
+				size_t used() { return this->_used; }
 
 				void clear() {
-					memset(this->ptr, 0, (this->trust) ? this->used : this->len);
+					memset(this->ptr, 0, (this->trust) ? this->_used : this->len);
+					this->_used = 0;
+				}
+
+				void clear(size_t start) {
+					memset((byte*)this->ptr + start, 0, ((this->trust) ? this->_used : this->len));
+					this->_used = 0;
 				}
 
 				~Pool() {
@@ -647,7 +667,6 @@
 
 			void tick() {
 				tickcnt++;
-				nux::log::info("tick: " + std::to_string(tickcnt));
 			}
 
 			void LoadPlugins() {
@@ -656,8 +675,9 @@
 				}
 			}
 
-			void InitNetwork() {
-				this->error = BedrockRakNet();
+			void Network() {
+				// std::thread t1();
+				BedrockRakNet();
 			}
 
 			void InitWorlds() {
@@ -809,7 +829,7 @@
 				{
 					this->running = true;
 					std::thread t1(&Server::run, this);
-					std::thread t2(&Server::InitNetwork, this);
+					std::thread t2(&Server::Network, this);
 					t1.join(); t2.join();
 				}
 				
@@ -846,30 +866,37 @@
 		uint64_t* ClientGuid = nullptr;
 		uint32_t* ClientIP = nullptr;
 		byte* ClientIPv6;
-		bool BedrockRakNet() {
+
+		sockaddr_in client_in;
+		socklen_t clen = sizeof(client_in);
+		int listenfd = -1;
+
+		void BedrockRakNet() {
 			// 0. initial
 			// i'm annoyed and tired... don't support ipv6 currently... (2026.10.18, bzjsmdl)
 
 			// create an arena of this thread
-			size_t localsize = MB(8);
-			nux::Pool localbuffer = nux::Pool((byte*)buffer.allocate(localsize) + MB(4), MB(4));
-			byte* ptr = (byte*)localbuffer.data();
-			
-			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
+			size_t localsize = MB(4);
+			nux::Pool localbuffer = nux::Pool((byte*)buffer.allocate(localsize), MB(4));
+			nux::Pool SokectBuffer = nux::Pool((byte*)buffer.allocate(localsize), MB(4));
+			byte* ptr = (byte*)SokectBuffer.data();
 
 			// clear `errno`
 			errno = 0;
 
 			// other initialization
-			epoll_event* events = nullptr;
 			static uint64_t cidx;
+			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
+
+			epoll_event* events =  (epoll_event*)localbuffer.allocate(sizeof(epoll_event) * 16);
 			this->ClientGuid = (uint64_t*)localbuffer.allocate(sizeof(uint64_t) * this->data.max_players);
 			this->ClientIP = (uint32_t*)localbuffer.allocate(sizeof(uint32_t) * this->data.max_players);
 			this->ClientIPv6 = (byte*)localbuffer.allocate(sizeof(byte) * 16 * this->data.max_players);
+			size_t tmp_base_offset = localbuffer.used();
 			
 			// 1. create a UDP socket and an epoll instance
 			// 1.1 create a UDP socket 
-			int listenfd, epollfd;
+			int listenfd = -1, epollfd = -1;
 			listenfd = socket((t->ipv6) ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
 			if (listenfd == -1) goto err;
 
@@ -886,7 +913,6 @@
 			if (bind(listenfd, (const sockaddr*)&client_in, clen) == -1) goto err;
 			nux::log::info("Server has successfully bound port " + std::to_string(((t->ipv6) ? data.server_portv6 : data.server_port)));
 			
-			// 3. Ready build connection with client
 			{
 				int current_flags = fcntl(listenfd, F_GETFL, 0);
 				// socket is set as non-blocking
@@ -899,8 +925,6 @@
 				ev.data.fd = listenfd;
 				epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev);
 			}	
-
-			events = (epoll_event*)localbuffer.allocate(sizeof(epoll_event) * 16);
 			
 			nux::log::info("Try to build connection with client");
 			// 4. build connection with client
@@ -913,7 +937,7 @@
 					continue;
 				}
 				if (n == -1) {
-					if (errno == EINTR) continue;
+					if (errno == EINTR || errno == EWOULDBLOCK) continue;
 					goto err;
 				}
 				
@@ -925,25 +949,13 @@
 						build_connect: {
 							// Receive Client Data
 							n = recvfrom(listenfd, ptr, size, 0, (sockaddr*)&client_in, &clen);
-							// nux::fmt::show_bytes(ptr, n);
 							if (n == -1) {
-								if (errno == EINTR) goto build_connect;
+								if (errno == EINTR || errno == EWOULDBLOCK) goto build_connect;
 								break;
 							}
 
 							uint16_t mtu = 0;
 							switch (ptr[0]) {
-								case 0x00: {	// I don't know it can run here, or cannot run here
-									// Receive Connected Ping and Send Connected Pong
-									uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-										std::chrono::system_clock::now().time_since_epoch()
-									).count();
-									*(uint64_t*)(ptr + 9) = now;
-									ptr[0] = 0x03;
-									n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
-									if (n == -1) goto err;
-									goto build_connect;
-								}
 								case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
 									if (this->GetPlayerCount() >= data.max_players) break;
 								case ID_UNCONNECTED_PING: {
@@ -1002,51 +1014,31 @@
 									break;
 								}
 								case 0x07: {
-									nux::fmt::print("$1BP 1$r\n");
 									size_t ServerAddrBase = 17;
+									
 									if (is_cookie) {
-										this->SecurityChallenge = ptr[21] ? false : true;
+										this->SecurityChallenge = ptr[21];
 										ServerAddrBase = 22;
 										if (current_seed ^ client_in.sin_addr.s_addr != expected_cookie) goto end;
 									}
+
 									if (ptr[ServerAddrBase] == 0x04) {
-										this->ServerIP = ~(*(uint32_t*)(ptr + ServerAddrBase + 1));
-										this->ServerIP = ntohl(this->ServerIP);
+										this->ServerIP = ntohl(~(*(uint32_t*)(ptr + ServerAddrBase + 1)));
 										this->ClientIP[cidx] = client_in.sin_addr.s_addr;
 										// this->ClientIPv6;
 										// ;
 									}
-									this->ClientGuid[cidx] = 0; 
+
+									this->ClientGuid[cidx] = *(uint64_t*)(ptr + ServerAddrBase + 9); 
 
 									// Start to build `Open Connection Reply 2`
 									ptr[0]++; *(uint64_t*)(ptr + 17) = this->server_guid;
-									ptr[25] = 0x04; *(uint32_t*)(ptr + 26) = ~this->ClientIP[cidx];
-									*(uint16_t*)(ptr + 30) = htons(this->data.server_port);
-									*(uint16_t*)(ptr + 32) = mtu; ptr[34] = t->encryption;
-									
+									ptr[25] = 0x04; *(uint32_t*)(ptr + 26) = htonl(~(this->ClientIP[cidx]));
+									*(uint16_t*)(ptr + 30) = htons(client_in.sin_port);
+									*(uint16_t*)(ptr + 34) = mtu; ptr[34] = t->encryption;
+
 									n = sendto(listenfd, ptr, (t->ipv6 ? 57 : 35), 0, (struct sockaddr*)&client_in, clen);
 									if (n == -1) goto err;
-									break;
-								}
-								case 0x09: {
-									// nux::fmt::show_bytes(ptr, n);
-									uint64_t RequestTime = *(uint64_t*)(ptr + 9);
-
-									ptr[0]++; *(uint32_t*)(ptr + 1) = ~this->ClientIP[cidx];
-									*(uint16_t*)(ptr + 5) = cidx; *(uint64_t*)(ptr + 80) = RequestTime;
-
-									for (size_t j = 0; j < 10; j++)
-										memcpy(ptr + 10 + (7 * j), NULL_ADDRESS, 7);					
-									*(uint64_t*)(ptr + 88) = std::chrono::duration_cast<std::chrono::milliseconds>(
-										std::chrono::system_clock::now().time_since_epoch()
-									).count();
-
-									n = sendto(listenfd, ptr, (t->ipv6 ? 337 : 95), 0, (struct sockaddr*)&client_in, clen);
-									if (n == -1) goto err;
-									break;
-								}
-								case 0x13: {
-									nux::fmt::show_bytes(ptr, n);
 									break;
 								}
 								case 0x19: {
@@ -1056,7 +1048,93 @@
 									}
 									break;
 								}
-								default: break;
+								default:
+									if ((ptr[0] & 0x80) == 0x80 && (ptr[0] & 0x60) == 0) {
+										// local variable `reliability_type` equals a
+										#define rte(a) (reliability_type == a)
+										uint32_t SequenceNumber = 0; memcpy(&SequenceNumber, ptr + 1, 3); 
+										byte reliability_type = ptr[4] >> 5; bool is_slice = ptr[4] & 0x10 == 0x10;
+										uint16_t len_in_bits = ntohs(*(uint16_t*)(ptr + 5)); byte OrderChannel = 0;
+										uint32_t ReliableFrameIndex = 0, SequencedFrameIndex = 0, OrderedFrameIndex = 0;
+										size_t pos = 7;
+										// uint32_t CompoundSize = 0, SliceIndex = 0;
+										// std::unordered_map<uint16_t, uint32_t> Compound;
+										// nux::Pool pool = nux::Pool(this->buffer.allocate(MB(8)), MB(8));
+
+										if (rte(ReliabilityType::ReliableSequenced) || rte(ReliabilityType::Reliable) ||\
+											rte(ReliabilityType::ReliableAndAckReceipt) || rte(ReliabilityType::ReliableOrderedAndAckReceipt) ||\
+											rte(ReliabilityType::ReliableOrdered)
+										) {
+											memcpy(&ReliableFrameIndex, ptr + pos, 3);
+											pos += 3;
+										}
+										if (rte(ReliabilityType::ReliableSequenced) || rte(ReliabilityType::UnreliableSequenced)) {
+											memcpy(&SequencedFrameIndex, ptr + pos, 3);
+											pos += 3;
+										}
+										if (rte(ReliabilityType::ReliableOrdered) || rte(ReliabilityType::ReliableOrderedAndAckReceipt)) {
+											memcpy(&OrderedFrameIndex, ptr + pos, 3);
+											pos += 3; OrderChannel = ptr[pos];
+										}
+										if (is_slice) {
+											;
+										}
+
+										uint32_t tmp_sn = SequenceNumber - 1;
+										byte* ack_packet = (byte*)localbuffer.allocate(7);	
+										ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
+										ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
+										ssize_t n2 = sendto(listenfd, ptr, 7, 0, (struct sockaddr*)&client_in, clen);
+
+										SequenceNumber++;
+										memcpy(ptr + 1, &SequenceNumber, 3);
+
+										localbuffer.clear(tmp_base_offset);
+
+										printf("\n\nClient: ");
+										nux::fmt::show_bytes(ptr, n);
+
+										switch (ptr[pos]) {
+											case 0x09: {
+												uint64_t RequestTime = *(uint64_t*)(ptr + pos + 9);
+
+												ptr[pos] = 0x10; ptr[pos + 1] = (t->ipv6 ? 0x6 : 0x4);
+												*(uint32_t*)(ptr + pos + 2) = ~this->ClientIP[cidx];
+												*(uint16_t*)(ptr + pos + 6) = cidx; *(uint64_t*)(ptr + pos + 78) = RequestTime;
+
+												for (size_t j = 0; j < 10; j++)
+													memcpy(ptr + 8 + pos + (7 * j), NULL_ADDRESS, 7);					
+												*(uint64_t*)(ptr + pos + 86) = std::chrono::duration_cast<std::chrono::milliseconds>(
+													std::chrono::system_clock::now().time_since_epoch()
+												).count();
+
+												size_t size = pos + (t->ipv6 ? 335 : 93) + 1;
+
+												*(uint16_t*)(ptr + 5) = htons((size - pos) << 3);
+
+												n = sendto(listenfd, ptr, size, 0, (struct sockaddr*)&client_in, clen);
+												if (n == -1) goto err;
+												break;
+											}
+											case 0x00: {	// I don't know it can run here, or cannot run here
+												// Receive Connected Ping and Send Connected Pong
+												uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+													std::chrono::system_clock::now().time_since_epoch()
+												).count();
+												*(uint64_t*)(ptr + 9) = now;
+												ptr[0] = 0x03;
+												n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
+												if (n == -1) goto err;
+												goto build_connect;
+											}
+											case 0x13: {
+												printf("Can Run!\n");
+												break;
+											}
+											default: break;
+										}
+										#undef rte
+									}
 							}
 							goto build_connect;
 							end: ;
@@ -1064,10 +1142,13 @@
 					}
 				}
 			}
-			return false;
+			return;
 			err:
+				this->error = true;
+				close(listenfd);
 				CPPRT_THROW_EXCEPTION_FAIL("\"" + strerror(errno) + "\"");
-				return true;
+				this->stop();
+				return;
 		}
 	};
 
