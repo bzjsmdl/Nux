@@ -1081,10 +1081,6 @@
 										}
 
 										uint32_t tmp_sn = SequenceNumber;
-										byte* ack_packet = (byte*)localbuffer.allocate(7);	
-										ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
-										ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
-										ssize_t n2 = sendto(listenfd, ack_packet, 7, 0, (struct sockaddr*)&client_in, clen);
 
 										SequenceNumber++;
 										memcpy(ptr + 1, &SequenceNumber, 3);
@@ -1096,6 +1092,13 @@
 
 										switch (ptr[pos]) {
 											case 0x09: {
+												{
+													byte* ack_packet = (byte*)localbuffer.allocate(7);	
+													ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
+													ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
+													ssize_t n2 = sendto(listenfd, ack_packet, 7, 0, (struct sockaddr*)&client_in, clen);
+													if (n2 == -1) goto err;
+												}
 												uint64_t RequestTime = *(uint64_t*)(ptr + pos + 9);
 
 												ptr[pos] = 0x10; ptr[pos + 1] = (t->ipv6 ? 0x6 : 0x4);
