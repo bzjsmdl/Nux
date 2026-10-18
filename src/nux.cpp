@@ -12,6 +12,7 @@
 	#include <sys/stat.h>
 	#include <sys/types.h>
 	#include <sys/socket.h>
+	#include <sys/epoll.h>
 	#include <arpa/inet.h>
 	#include <netinet/in.h>
 	#include <errno.h>
@@ -22,6 +23,7 @@
 	#include <alloca.h>
 	#include <immintrin.h>
 	#include <netdb.h>
+	#include <fcntl.h>
 
 	// Include Thrid-Party Library
 	// get more information: `include/README.md`!
@@ -92,6 +94,7 @@
 // |				PART 2			Constants							|
 // ======================================================================
 	const byte BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID[16] = {0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78}; 
+	const byte NULL_ADDRESS[7] = {0x04, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00};
 
 // ======================================================================
 // |				PART 3		Some Structions							|
@@ -113,6 +116,7 @@
 		bool werr = false;
 		bool ipv6 = false;
 		bool security = false;
+		bool encryption = false;
 		std::string plugins_path;
 		std::string data_path;
 		std::string ServerRootDir = getcwd(nullptr, 0);
@@ -619,14 +623,18 @@
 			bool error = false;		// Running Error
 			uint64_t server_guid = nux::math::randint();
 			ServerProperties data;
-			unsigned long long int tickcnt = 0;
-			volatile std::atomic<bool> running {false};
+			std::atomic<unsigned long long int> tickcnt {0};
+			std::atomic<bool> running {false};
 			size_t player_cnt = 0;
 			byte ProtocolVersion = 0;
 			uint32_t ServerIP = 0;
+			byte ServerIPv6[16] = {0};
 
 			size_t size = MB(32);
 			nux::Pool buffer = nux::Pool(size);
+
+			bool is_cookie = false;
+			bool SecurityChallenge = false;
 
 			void run() {
 				while (this->running) {
@@ -835,22 +843,40 @@
 // ======================================================================
 		private:
 		std::queue<Event> event_queue;
+		uint64_t* ClientGuid = nullptr;
+		uint32_t* ClientIP = nullptr;
+		byte* ClientIPv6;
 		bool BedrockRakNet() {
 			// 0. initial
+			// i'm annoyed and tired... don't support ipv6 currently... (2026.10.18, bzjsmdl)
 
 			// create an arena of this thread
 			size_t localsize = MB(8);
-			nux::Pool localbuffer = nux::Pool((byte*)buffer.allocate(localsize) + MB(4), localsize);
+			nux::Pool localbuffer = nux::Pool((byte*)buffer.allocate(localsize) + MB(4), MB(4));
 			byte* ptr = (byte*)localbuffer.data();
-
+			
 			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
 
 			// clear `errno`
 			errno = 0;
+
+			// other initialization
+			epoll_event* events = nullptr;
+			static uint64_t cidx;
+			this->ClientGuid = (uint64_t*)localbuffer.allocate(sizeof(uint64_t) * this->data.max_players);
+			this->ClientIP = (uint32_t*)localbuffer.allocate(sizeof(uint32_t) * this->data.max_players);
+			this->ClientIPv6 = (byte*)localbuffer.allocate(sizeof(byte) * 16 * this->data.max_players);
 			
-			// 1. create a UDP socket
-			int listenfd = socket((t->ipv6) ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
+			// 1. create a UDP socket and an epoll instance
+			// 1.1 create a UDP socket 
+			int listenfd, epollfd;
+			listenfd = socket((t->ipv6) ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
 			if (listenfd == -1) goto err;
+
+			// 1.2 create an epoll instance (I'm so bored...)
+			epollfd = epoll_create1(0);
+			if (epollfd == -1) goto err;
+
 			nux::log::info("Server has created a UDP socket");
 
 			// 2. bind a fixed port
@@ -860,97 +886,184 @@
 			if (bind(listenfd, (const sockaddr*)&client_in, clen) == -1) goto err;
 			nux::log::info("Server has successfully bound port " + std::to_string(((t->ipv6) ? data.server_portv6 : data.server_port)));
 			
+			// 3. Ready build connection with client
+			{
+				int current_flags = fcntl(listenfd, F_GETFL, 0);
+				// socket is set as non-blocking
+				fcntl(listenfd, F_SETFL, current_flags | O_NONBLOCK);
+
+				// `listenfd` is registered in epoll
+				epoll_event ev = *(epoll_event*)localbuffer.allocate(sizeof(epoll_event));
+				ev.events = EPOLLIN | EPOLLET;
+				// EPOLLIN : read; EPOLLET: ET mode
+				ev.data.fd = listenfd;
+				epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev);
+			}	
+
+			events = (epoll_event*)localbuffer.allocate(sizeof(epoll_event) * 16);
+			
 			nux::log::info("Try to build connection with client");
-			// 3. build connection with client
-			build_connect: {
-				// Receive Client Data
-				ssize_t n = recvfrom(listenfd, ptr, size, 0, (sockaddr*)&client_in, &clen);
-				nux::fmt::show_bytes(ptr, n);
-				if (n == -1) goto err;
-
-				switch (ptr[0]) {
-					case 0x00: {	// I don't know it can run here, or cannot run here
-						// Receive Connected Ping and Send Connected Pong
-						uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-							std::chrono::system_clock::now().time_since_epoch()
-						).count();
-						*(uint64_t*)(ptr + 9) = now;
-						ptr[0] = 0x03;
-						n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
-						if (n == -1) goto err;
-						goto build_connect;
-					}
-					case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
-						if (this->GetPlayerCount() >= data.max_players) break;
-					case ID_UNCONNECTED_PING: {
-						// Build an Unconnected Pong
-						ptr[0] = 0x1c;
-						*(uint64_t*)(ptr + 1) = server_guid;
-						memcpy(ptr + 9, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16);
-
-						std::string cpy = data.gamemode;
-						cpy[0] |= 0x20;
-						int gmnum = 0;
-						switch (cpy[0]) {
-							case 'A':
-								gmnum++;
-							case 'C':
-								gmnum++;
-								break;
-							case 'S':
-								if (cpy[1] == 'u') break;
-							default:
-								gmnum = -1; 
-						}
-							
-						std::string server_id_str = "MCPE;";
-						uint16_t slen = server_id_str.length();
-						server_id_str += data.server_name + ";" + "766;1.21.50;" + std::to_string(this->GetPlayerCount()) +\
-										 ";" + std::to_string(data.max_players) + ";" + std::to_string(server_guid) + ";" +\
-										 data.level_name + ";" + data.gamemode + ";" + ((gmnum == -1) ? "" : std::to_string(gmnum)) +\
-										 std::to_string(data.server_port) + ";" + std::to_string(data.server_portv6);
-						*(uint16_t*)(ptr + 25) = htons(slen);
-						strcpy((char*)ptr + 27, server_id_str.c_str());
-
-						// Send to client
-						n = sendto(listenfd, ptr, 27 + slen, 0, (sockaddr*)&client_in, clen);
-						if (n == -1) goto err;
-						break;
-					}
-					case 0x05: {
-						static uint16_t mtu = n;
-						static bool is_cookie = false;
-						ptr[0]++;
-						this->ProtocolVersion = ptr[17];
-						*(uint64_t*)(ptr + 17) = this->server_guid;
-						ptr[25] = t->security;
-						size_t mtu_fbase = 26;
-						if (ptr[25]) {
-							*(int*)(ptr + mtu_fbase) = nux::math::randint();
-							mtu_fbase += 4;
-							is_cookie = true;
-						}
-						*(uint16_t*)(ptr + mtu_fbase) = mtu;
-						n = sendto(listenfd, ptr, (ptr[25] ? 31 : 27), 0, (struct sockaddr*)&client_in, clen);
-						if (n == -1) goto err;
-						break;
-					}
-					case 0x07: {
-						printf("Here\n");
-						break;
-					}
-					case 0x19: {
-						if (memcmp(ptr + 2, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16) == 0 && *(uint64_t*)(ptr + 18) == this->server_guid) {
-							CLIENT_SERVER_PROTOCOL_VERSION_NOT_MATCH_FAIL();
-							goto err;
-						}
-						break;
-					}
-					default: break;
+			// 4. build connection with client
+			
+			while (true) {
+				int seed = 0; bool first = true;
+				ssize_t n = epoll_wait(epollfd, events, 16, 5000);
+				if (n == 0) {
+					seed = nux::math::randint();
+					continue;
 				}
-				goto build_connect;
-			}
+				if (n == -1) {
+					if (errno == EINTR) continue;
+					goto err;
+				}
+				
 
+				for (ssize_t i = 0; i < n; i++) {
+					if (events[i].data.fd == listenfd) {
+						int current_seed = 0;
+						int expected_cookie = 0;
+						build_connect: {
+							// Receive Client Data
+							n = recvfrom(listenfd, ptr, size, 0, (sockaddr*)&client_in, &clen);
+							// nux::fmt::show_bytes(ptr, n);
+							if (n == -1) {
+								if (errno == EINTR) goto build_connect;
+								break;
+							}
+
+							uint16_t mtu = 0;
+							switch (ptr[0]) {
+								case 0x00: {	// I don't know it can run here, or cannot run here
+									// Receive Connected Ping and Send Connected Pong
+									uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+										std::chrono::system_clock::now().time_since_epoch()
+									).count();
+									*(uint64_t*)(ptr + 9) = now;
+									ptr[0] = 0x03;
+									n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
+									if (n == -1) goto err;
+									goto build_connect;
+								}
+								case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
+									if (this->GetPlayerCount() >= data.max_players) break;
+								case ID_UNCONNECTED_PING: {
+									// Build an Unconnected Pong
+									ptr[0] = 0x1c;
+									*(uint64_t*)(ptr + 1) = server_guid;
+									memcpy(ptr + 9, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16);
+
+									std::string cpy = data.gamemode;
+									cpy[0] |= 0x20;
+									int gmnum = 0;
+									switch (cpy[0]) {
+										case 'A':
+											gmnum++;
+										case 'C':
+											gmnum++;
+											break;
+										case 'S':
+											if (cpy[1] == 'u') break;
+										default:
+											gmnum = -1; 
+									}
+										
+									std::string server_id_str = "MCPE;";
+									uint16_t slen = server_id_str.length();
+									server_id_str += data.server_name + ";" + "766;1.21.50;" + std::to_string(this->GetPlayerCount()) +\
+													";" + std::to_string(data.max_players) + ";" + std::to_string(server_guid) + ";" +\
+													data.level_name + ";" + data.gamemode + ";" + ((gmnum == -1) ? "" : std::to_string(gmnum)) +\
+													std::to_string(data.server_port) + ";" + std::to_string(data.server_portv6);
+									*(uint16_t*)(ptr + 25) = htons(slen);
+									strcpy((char*)ptr + 27, server_id_str.c_str());
+
+									// Send to client
+									n = sendto(listenfd, ptr, 27 + slen, 0, (sockaddr*)&client_in, clen);
+									if (n == -1) goto err;
+									break;
+								}
+								case 0x05: {
+									this->ProtocolVersion = ptr[17];
+
+									// start to build
+									mtu = n; ptr[0]++;
+									*(uint64_t*)(ptr + 17) = this->server_guid;
+									ptr[25] = t->security;
+									size_t mtu_fbase = 26;
+									if (ptr[25]) {
+										current_seed = seed; expected_cookie = current_seed ^ client_in.sin_addr.s_addr;
+										*(int*)(ptr + mtu_fbase) = seed ^ client_in.sin_addr.s_addr;
+										mtu_fbase += 4;
+										this->is_cookie = true;
+									}
+									*(uint16_t*)(ptr + mtu_fbase) = mtu;
+
+									n = sendto(listenfd, ptr, (ptr[25] ? 32 : 28), 0, (struct sockaddr*)&client_in, clen);
+									if (n == -1) goto err;
+									break;
+								}
+								case 0x07: {
+									nux::fmt::print("$1BP 1$r\n");
+									size_t ServerAddrBase = 17;
+									if (is_cookie) {
+										this->SecurityChallenge = ptr[21] ? false : true;
+										ServerAddrBase = 22;
+										if (current_seed ^ client_in.sin_addr.s_addr != expected_cookie) goto end;
+									}
+									if (ptr[ServerAddrBase] == 0x04) {
+										this->ServerIP = ~(*(uint32_t*)(ptr + ServerAddrBase + 1));
+										this->ServerIP = ntohl(this->ServerIP);
+										this->ClientIP[cidx] = client_in.sin_addr.s_addr;
+										// this->ClientIPv6;
+										// ;
+									}
+									this->ClientGuid[cidx] = 0; 
+
+									// Start to build `Open Connection Reply 2`
+									ptr[0]++; *(uint64_t*)(ptr + 17) = this->server_guid;
+									ptr[25] = 0x04; *(uint32_t*)(ptr + 26) = ~this->ClientIP[cidx];
+									*(uint16_t*)(ptr + 30) = htons(this->data.server_port);
+									*(uint16_t*)(ptr + 32) = mtu; ptr[34] = t->encryption;
+									
+									n = sendto(listenfd, ptr, (t->ipv6 ? 57 : 35), 0, (struct sockaddr*)&client_in, clen);
+									if (n == -1) goto err;
+									break;
+								}
+								case 0x09: {
+									// nux::fmt::show_bytes(ptr, n);
+									uint64_t RequestTime = *(uint64_t*)(ptr + 9);
+
+									ptr[0]++; *(uint32_t*)(ptr + 1) = ~this->ClientIP[cidx];
+									*(uint16_t*)(ptr + 5) = cidx; *(uint64_t*)(ptr + 80) = RequestTime;
+
+									for (size_t j = 0; j < 10; j++)
+										memcpy(ptr + 10 + (7 * j), NULL_ADDRESS, 7);					
+									*(uint64_t*)(ptr + 88) = std::chrono::duration_cast<std::chrono::milliseconds>(
+										std::chrono::system_clock::now().time_since_epoch()
+									).count();
+
+									n = sendto(listenfd, ptr, (t->ipv6 ? 337 : 95), 0, (struct sockaddr*)&client_in, clen);
+									if (n == -1) goto err;
+									break;
+								}
+								case 0x13: {
+									nux::fmt::show_bytes(ptr, n);
+									break;
+								}
+								case 0x19: {
+									if (memcmp(ptr + 2, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16) == 0 && *(uint64_t*)(ptr + 18) == this->server_guid) {
+										CLIENT_SERVER_PROTOCOL_VERSION_NOT_MATCH_FAIL();
+										goto err;
+									}
+									break;
+								}
+								default: break;
+							}
+							goto build_connect;
+							end: ;
+						}
+					}
+				}
+			}
 			return false;
 			err:
 				CPPRT_THROW_EXCEPTION_FAIL("\"" + strerror(errno) + "\"");
@@ -968,8 +1081,12 @@ int main(int argc, const char** argv) {
 		if (strequ(argv[i], "--load-plugins")) t->LoadPlugin = true;
 		else if (strequ("-debug", argv[i])) t->debug = true;
 		else if (strequ("-werr", argv[i])) t->werr = true;
-		else if (strequ("-ipv6", argv[i])) t->ipv6 = true;
-		else if (strequ(argv[i], "-security")) t->security = true;
+		else if (strequ(argv[i], "--enable-in-network")) {
+			i++;
+			if (strequ(argv[i], "security")) t->security = true;
+			else if (strequ(argv[i], "encryption")) t->encryption = true;
+			else if (strequ(argv[i], "ipv6")) t->ipv6 = true;
+		}
 		else if (strequ("-v", argv[i]) || strequ("--version", argv[i])) printf("Nux Version - alpha 1.0.0\n");
 	}
 	Server server = Server();
