@@ -1080,11 +1080,11 @@
 											;
 										}
 
-										uint32_t tmp_sn = SequenceNumber - 1;
+										uint32_t tmp_sn = SequenceNumber;
 										byte* ack_packet = (byte*)localbuffer.allocate(7);	
 										ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
 										ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
-										ssize_t n2 = sendto(listenfd, ptr, 7, 0, (struct sockaddr*)&client_in, clen);
+										ssize_t n2 = sendto(listenfd, ack_packet, 7, 0, (struct sockaddr*)&client_in, clen);
 
 										SequenceNumber++;
 										memcpy(ptr + 1, &SequenceNumber, 3);
