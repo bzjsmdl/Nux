@@ -101,6 +101,10 @@
 		#define VECTOR_TOO_SMALL_FAIL(sth) {\
 			nux::log::error((std::string)"Server failed because it tries to access something it shouldn't when it seeks " + sth);\
 		}
+
+		#define COMMAND_LINE_PARSE(msg) {\
+			nux::log::error((std::string)"Server failed when it parses command line. Because " + msg);\
+		}
 	#pragma endregion
 
 	// Bedrock RakNet Marco
@@ -155,6 +159,7 @@
 		bool ipv6 = false;
 		bool security = false;
 		bool encryption = false;
+		size_t max_memory = MB(256);  // unit: byte
 		std::string plugins_path;
 		std::string data_path;
 		std::string ServerRootDir = getcwd(nullptr, 0);
@@ -403,17 +408,17 @@
 // |				PART 4		Global Variable							|
 // ======================================================================
 #pragma region
-	Table* t = nullptr;
+	Table* t = new Table();
 	ServerProperties data;
+	static size_t allocate_size = 0;
 #pragma endregion
 
+namespace nux {
 // ======================================================================
 // |				PART 5			Utils								|
-// ======================================================================
+// ======================================================================		
 #pragma region
-	// utils
-	namespace nux {
-		namespace fmt {
+	namespace fmt {
 			static std::mutex FmtMutex;
 			/*	$ + command_charater
 					-- Color Text --
@@ -521,7 +526,7 @@
 			}
 		}
 
-		namespace fs {
+	namespace fs {
 			inline bool exists(std::string p) {
 				status st;
 				return stat(p.c_str(), &st) == 0;
@@ -539,7 +544,7 @@
 			}
 		}
 
-		namespace log {
+	namespace log {
 			static std::mutex LogMutex;
 
 			// don't use it!!! we assume it's private!!!
@@ -601,7 +606,12 @@
 			}
 		}
 
-		namespace math {
+	namespace math {
+		inline ssize_t min(ssize_t a, ssize_t b) {
+			return a < b ? a : b;
+		}
+
+		namespace random {
 			inline uint64_t randint(uint64_t min = 0, uint64_t max = (uint64_t)-1) {
 				std::random_device rd;
 				std::mt19937_64 gen(rd());
@@ -630,62 +640,9 @@
 				return ss;
 			}
 		}
-	
-		// Memory Pool
-		class Pool {
-			private:
-				void* ptr = nullptr;
-				size_t len = 1024;
-				size_t _used = 0;
-				bool trust = true;
-				bool notFree = false;
+	}
 
-			public:
-				Pool(const Pool&) = delete;
-				Pool& operator=(const Pool&) = delete;
-
-				Pool(size_t N) : len(N) {
-					this->len = ((N >> 6) + 1) * 64;
-					this->ptr = malloc(this->len);
-				}
-
-				Pool() {
-					this->ptr = malloc(this->len);
-				}
-
-				Pool(void* __ptr, size_t __len) : ptr(__ptr), len(__len), notFree(true) {}
-
-				void* allocate(size_t __size) {
-					// you can go to https://github.com/bzjsmdl/Nux/blob/main/src/nux.cpp#L594 if you want to know why i write `__size > this->len - this->used`
-					if (__size > this->len - this->_used) return nullptr;
-					void* ret = (char*)this->ptr + this->_used;
-					this->_used += __size;
-					return ret;
-				}
-
-				void* data() {
-					this->trust = false;
-					return this->ptr;
-				}
-
-				size_t size() { return this->len; }
-				
-				size_t used() { return this->_used; }
-
-				void clear() {
-					memset(this->ptr, 0, (this->trust) ? this->_used : this->len);
-					this->_used = 0;
-				}
-
-				void clear(size_t start) {
-					memset((byte*)this->ptr + start, 0, ((this->trust) ? this->_used : this->len));
-					this->_used = 0;
-				}
-
-				~Pool() { if (!notFree) free(ptr); }
-		};
-		
-		class Cursor {
+	class Cursor {
 			private:
 				const byte* data;
 				size_t pool_size;
@@ -693,10 +650,7 @@
 				size_t rpos = 0;
 				bool error = false;
 			public:
-				Cursor(nux::Pool& __data) {
-					this->pool_size = __data.size();
-					data = (const byte*)__data.data();
-				}
+				Cursor(const byte* __data, size_t __size) : data(__data), pool_size(__size) {}
 
 				inline void seek(size_t pos, bool read) { read ? this->rseek(pos) : this->wseek(pos); }
 
@@ -730,7 +684,7 @@
 					// when this->pos == 0, read<int>() => sizeof(int) = 4, this->pool_size + this->pos = 8 - 0 = 4 (valid)
 					// when this->pos == -4, read<int>() => sizeof(int) = 4, this->pool_size + this->pos = 8 - (-4) = 12 (invalid)
 					// because of this, use `size > this->pool_size - this->pos` in here
-					byte* ret = nullptr;
+					byte* ret = nullptr; // bp
 					if (size > this->pool_size - this->rpos) {
 						VECTOR_TOO_SMALL_FAIL("`nux::Cursor::rpos`");
 						this->error = true; return ret;
@@ -754,28 +708,71 @@
 
 				inline bool GetError() { return this->error; }
 		};
-	}
+	
+	class Arena {
+			private:
+				void* ptr = nullptr;
+				size_t len = 1024;
+				size_t used = 0;
+			public:
+				Arena(size_t n) : len(n) {
+					this->len = ((n >> 6) + 1) * 64;
+					this->ptr = malloc(this->len);
+					allocate_size += this->len;
+				}
+
+				void* allocate(size_t __size) {
+					// you can go to `nux::Cursor::read` if you want to know why i write `__size > this->len - this->used`
+					if (__size > this->len - this->used) return nullptr;
+					void* ret = (char*)this->ptr + this->used;
+					this->used += __size;
+					return ret;
+				}
+
+				void* data() { return this->ptr; }
+
+				size_t max_size() { return this->len; }
+					
+				size_t size() { return this->used; }
+
+				void clear() {
+					memset(this->ptr, 0, this->used);
+					this->used = 0;
+				}
+
+				void clear(size_t start) {
+					memset((byte*)this->ptr + start, 0, this->used - start);
+					this->used = 0;
+				}
+
+				~Arena() { free(this->ptr); allocate_size -= this->len; }
+		};
 #pragma endregion
-		
+
 // ======================================================================
-// |				PART 6			Server								|
+// |				PART 6		Management Layer						|
 // ======================================================================
+#pragma region
+	
+#pragma endregion
+
+// ======================================================================
+// |				PART 7			Server								|
+// ======================================================================
+#pragma region
 	class Server {
 		private:
 			// static member
 			static std::mutex ServerMutex;
 
 			bool error = false;		// Running Error
-			uint64_t server_guid = nux::math::randint();
+			uint64_t server_guid = nux::math::random::randint();
 			std::atomic<unsigned long long int> tickcnt {0};
 			std::atomic<bool> running {false};
 			size_t player_cnt = 0;
 			byte ProtocolVersion = 0;
 			uint32_t ServerIP = 0;
 			byte ServerIPv6[16] = {0};
-
-			size_t size = MB(32);
-			nux::Pool buffer = nux::Pool(size);
 
 			bool is_cookie = false;
 			bool SecurityChallenge = false;
@@ -855,7 +852,7 @@
 				else {
 					nux::log::info("Try to read file " +  config_file);
 					size_t len = nux::fs::flen(hd_config);
-					char* text = (char*)buffer.allocate(len + 1); text[len] = 0;
+					char* text = new char[len + 1] {0};
 					// I think this function don't check return value because I want to fast finish it.
 					fread(text, 1, len, hd_config);
 					// but writing a comment is best in here
@@ -913,7 +910,7 @@
 							}
 							else if (key == "level-seed") {
 								std::string tmp = (config[key].is_string()) ? config[key] : "";
-								data.set(i, (tmp.empty() ? (signed long long int)nux::math::randint() : (signed long long int)config[key]));
+								data.set(i, (tmp.empty() ? (signed long long int)nux::math::random::randint() : (signed long long int)config[key]));
 							}
 							else {
 								if (config[key].is_boolean()) data.set(i, (bool)config[key]);
@@ -1015,10 +1012,8 @@
 			// i'm annoyed and tired... don't support ipv6 currently... (2026.10.18, bzjsmdl)
 
 			// create an arena of this thread
-			size_t localsize = MB(4);
-			nux::Pool localbuffer = nux::Pool((byte*)buffer.allocate(localsize), MB(4));
-			nux::Pool SokectBuffer = nux::Pool((byte*)buffer.allocate(localsize), MB(4));
-			byte* ptr = (byte*)SokectBuffer.data();
+			Arena NetworkBuffer(MB(16));
+			byte* ptr = (byte*)NetworkBuffer.allocate(MB(16));
 
 			// clear `errno`
 			errno = 0;
@@ -1027,11 +1022,11 @@
 			static uint64_t cidx;
 			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
 
-			epoll_event* events =  (epoll_event*)localbuffer.allocate(sizeof(epoll_event) * 16);
-			this->ClientGuid = (uint64_t*)localbuffer.allocate(sizeof(uint64_t) * data.max_players);
-			this->ClientIP = (uint32_t*)localbuffer.allocate(sizeof(uint32_t) * data.max_players);
-			this->ClientIPv6 = (byte*)localbuffer.allocate(sizeof(byte) * 16 * data.max_players);
-			size_t tmp_base_offset = localbuffer.used();
+			epoll_event* events =  (epoll_event*)NetworkBuffer.allocate(sizeof(epoll_event) * 16);
+			this->ClientGuid = (uint64_t*)NetworkBuffer.allocate(sizeof(uint64_t) * data.max_players);
+			this->ClientIP = (uint32_t*)NetworkBuffer.allocate(sizeof(uint32_t) * data.max_players);
+			this->ClientIPv6 = (byte*)NetworkBuffer.allocate(sizeof(byte) * 16 * data.max_players);
+			size_t tmp_base_offset = NetworkBuffer.size();
 			
 			// 1. create a UDP socket and an epoll instance
 			// 1.1 create a UDP socket 
@@ -1058,7 +1053,7 @@
 				fcntl(listenfd, F_SETFL, current_flags | O_NONBLOCK);
 
 				// `listenfd` is registered in epoll
-				epoll_event ev = *(epoll_event*)localbuffer.allocate(sizeof(epoll_event));
+				epoll_event ev = *(epoll_event*)NetworkBuffer.allocate(sizeof(epoll_event));
 				ev.events = EPOLLIN | EPOLLET;
 				// EPOLLIN : read; EPOLLET: ET mode
 				ev.data.fd = listenfd;
@@ -1072,7 +1067,7 @@
 				int seed = 0; bool first = true;
 				ssize_t n = epoll_wait(epollfd, events, 16, 5000);
 				if (n == 0) {
-					seed = nux::math::randint();
+					seed = nux::math::random::randint();
 					continue;
 				}
 				if (n == -1) {
@@ -1087,7 +1082,7 @@
 						int expected_cookie = 0;
 						build_connect: {
 							// Receive Client Data
-							n = recvfrom(listenfd, ptr, size, 0, (sockaddr*)&client_in, &clen);
+							n = recvfrom(listenfd, ptr, MB(4), 0, (sockaddr*)&client_in, &clen);
 							if (n == -1) {
 								if (errno == EINTR || errno == EWOULDBLOCK) goto build_connect;
 								break;
@@ -1224,7 +1219,7 @@
 										SequenceNumber++;
 										memcpy(ptr + 1, &SequenceNumber, 3);
 
-										localbuffer.clear(tmp_base_offset);
+										NetworkBuffer.clear(tmp_base_offset);
 
 										printf("\n\nClient: ");
 										nux::fmt::show_bytes(ptr, n);
@@ -1232,7 +1227,7 @@
 										switch (ptr[pos]) {
 											case 0x09: {
 												{
-													byte* ack_packet = (byte*)localbuffer.allocate(7);	
+													byte* ack_packet = (byte*)NetworkBuffer.allocate(7);	
 													ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
 													ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
 													ssize_t n2 = sendto(listenfd, ack_packet, 7, 0, (struct sockaddr*)&client_in, clen);
@@ -1293,12 +1288,14 @@
 				return;
 		}
 	};
+#pragma endregion
+
+}	
 
 // ======================================================================
 // |				THE LAST PART		Nux Server Entry				|
 // ======================================================================
 int main(int argc, const char** argv) {
-	t = new Table();
 	t->data_path = t->ServerRootDir + "/data/"; t->plugins_path = t->ServerRootDir + "/plugins/";
 	for (int i = 0; i < argc; i++) {
 		if (strequ(argv[i], "--load-plugins")) t->LoadPlugin = true;
@@ -1311,7 +1308,17 @@ int main(int argc, const char** argv) {
 			else if (strequ(argv[i], "ipv6")) t->ipv6 = true;
 		}
 		else if (strequ("-v", argv[i]) || strequ("--version", argv[i])) printf("Nux Version - alpha 1.0.0\n");
+		else if (strequ("--max-memory", argv[i])) {
+			i++; size_t len = strlen(argv[i]);
+			switch (argv[i][len - 1]) {
+				case 'm': t->max_memory = MB(atoll(argv[i])); break;
+				case 'k': t->max_memory = KB(atoll(argv[i])); break; 
+				case 'g': t->max_memory = GB(atoll(argv[i])); break;
+				default: t->max_memory = atoll(argv[i]);
+			}
+			argv[i][len - 1];
+		}
 	}
-	Server server = Server();
+	nux::Server server = nux::Server();
 	return server.GetError() ? 1 : 0;
 }
