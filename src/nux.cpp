@@ -410,7 +410,10 @@
 #pragma region
 	Table* t = new Table();
 	ServerProperties data;
-	static size_t allocate_size = 0;
+	static std::atomic<size_t> allocate_size {0};
+	static std::atomic<size_t> thread_num {0};
+	size_t player_cnt = 0;
+	uint64_t server_guid = 0;
 #pragma endregion
 
 namespace nux {
@@ -715,6 +718,9 @@ namespace nux {
 				size_t len = 1024;
 				size_t used = 0;
 			public:
+				Arena(const Arena&) = delete;
+				Arena& operator=(const Arena&) = delete;
+
 				Arena(size_t n) : len(n) {
 					this->len = ((n >> 6) + 1) * 64;
 					this->ptr = malloc(this->len);
@@ -731,7 +737,7 @@ namespace nux {
 
 				void* data() { return this->ptr; }
 
-				size_t max_size() { return this->len; }
+				size_t capacity() { return this->len; }
 					
 				size_t size() { return this->used; }
 
@@ -742,7 +748,7 @@ namespace nux {
 
 				void clear(size_t start) {
 					memset((byte*)this->ptr + start, 0, this->used - start);
-					this->used = 0;
+					this->used = start;
 				}
 
 				~Arena() { free(this->ptr); allocate_size -= this->len; }
@@ -753,11 +759,332 @@ namespace nux {
 // |				PART 6		Management Layer						|
 // ======================================================================
 #pragma region
-	
+	class PluginScheduler {
+		private:
+			// std::queue<> taskQueue;
+		public:
+			PluginScheduler() {}
+		
+			// template<typename _Callable, typename... _Args>
+			// bool CreateTask(_Callable&& func, _Args&&... args) {
+			// 	;
+			// }
+
+	};
 #pragma endregion
 
 // ======================================================================
-// |				PART 7			Server								|
+// |				PART 7			Network								|
+// ======================================================================
+#pragma region
+	namespace net {
+		class Network {
+			public:
+				Network() {
+					BedrockRakNet();
+				}
+			private:
+				byte ProtocolVersion = 0;
+				uint32_t ServerIP = 0;
+				byte ServerIPv6[16] = {0};
+
+				bool is_cookie = false;
+				bool SecurityChallenge = false;
+				bool error = false;
+
+				std::queue<Event> event_queue;
+				uint64_t* ClientGuid = nullptr;
+				uint32_t* ClientIP = nullptr;
+				byte* ClientIPv6;
+
+				sockaddr_in client_in;
+				socklen_t clen = sizeof(client_in);
+				int listenfd = -1;
+
+				void BedrockRakNet() {
+					// 0. initial
+					// i'm annoyed and tired... don't support ipv6 currently... (2026.10.18, bzjsmdl)
+
+					// create an arena of this thread
+					Arena NetworkBuffer(MB(16));
+					byte* ptr = (byte*)NetworkBuffer.allocate(MB(4));
+
+					// clear `errno`
+					errno = 0;
+
+					// other initialization
+					static uint64_t cidx;
+					sockaddr_in client_in; socklen_t clen = sizeof(client_in);
+
+					epoll_event* events =  (epoll_event*)NetworkBuffer.allocate(sizeof(epoll_event) * 16);
+					this->ClientGuid = (uint64_t*)NetworkBuffer.allocate(sizeof(uint64_t) * data.max_players);
+					this->ClientIP = (uint32_t*)NetworkBuffer.allocate(sizeof(uint32_t) * data.max_players);
+					this->ClientIPv6 = (byte*)NetworkBuffer.allocate(sizeof(byte) * 16 * data.max_players);
+					size_t tmp_base_offset = NetworkBuffer.size();
+					
+					// 1. create a UDP socket and an epoll instance
+					// 1.1 create a UDP socket 
+					int listenfd = -1, epollfd = -1;
+					listenfd = socket((t->ipv6) ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
+					if (listenfd == -1) goto err;
+
+					// 1.2 create an epoll instance (I'm so bored...)
+					epollfd = epoll_create1(0);
+					if (epollfd == -1) goto err;
+
+					nux::log::info("Server has created a UDP socket");
+
+					// 2. bind a fixed port
+					client_in.sin_family = (t->ipv6) ? AF_INET6 : AF_INET;
+					client_in.sin_port = htons((t->ipv6) ? data.server_portv6 : data.server_port);
+					client_in.sin_addr.s_addr = htonl(INADDR_ANY);
+					if (bind(listenfd, (const sockaddr*)&client_in, clen) == -1) goto err;
+					nux::log::info("Server has successfully bound port " + std::to_string(((t->ipv6) ? data.server_portv6 : data.server_port)));
+					
+					{
+						int current_flags = fcntl(listenfd, F_GETFL, 0);
+						// socket is set as non-blocking
+						fcntl(listenfd, F_SETFL, current_flags | O_NONBLOCK);
+
+						// `listenfd` is registered in epoll
+						epoll_event ev = *(epoll_event*)NetworkBuffer.allocate(sizeof(epoll_event));
+						ev.events = EPOLLIN | EPOLLET;
+						// EPOLLIN : read; EPOLLET: ET mode
+						ev.data.fd = listenfd;
+						epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev);
+					}	
+					
+					nux::log::info("Try to build connection with client");
+					// 4. build connection with client
+					
+					while (true) {
+						int seed = 0; bool first = true;
+						ssize_t n = epoll_wait(epollfd, events, 16, 5000);
+						if (n == 0) {
+							seed = nux::math::random::randint();
+							continue;
+						}
+						if (n == -1) {
+							if (errno == EINTR || errno == EWOULDBLOCK) continue;
+							goto err;
+						}
+						
+
+						for (ssize_t i = 0; i < n; i++) {
+							if (events[i].data.fd == listenfd) {
+								int current_seed = 0;
+								int expected_cookie = 0;
+								build_connect: {
+									// Receive Client Data
+									n = recvfrom(listenfd, ptr, MB(4), 0, (sockaddr*)&client_in, &clen);
+									if (n == -1) {
+										if (errno == EINTR || errno == EWOULDBLOCK) goto build_connect;
+										break;
+									}
+
+									uint16_t mtu = 0;
+									switch (ptr[0]) {
+										case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
+											if (player_cnt >= data.max_players) break;
+										case ID_UNCONNECTED_PING: {
+											// Build an Unconnected Pong
+											ptr[0] = 0x1c;
+											*(uint64_t*)(ptr + 1) = server_guid;
+											memcpy(ptr + 9, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16);
+
+											std::string cpy = data.gamemode;
+											cpy[0] |= 0x20;
+											int gmnum = 0;
+											switch (cpy[0]) {
+												case 'A':
+													gmnum++;
+												case 'C':
+													gmnum++;
+													break;
+												case 'S':
+													if (cpy[1] == 'u') break;
+												default:
+													gmnum = -1; 
+											}
+												
+											std::string server_id_str = "MCPE;";
+											uint16_t slen = server_id_str.length();
+											server_id_str += data.server_name + ";" + "766;1.21.50;" + std::to_string(player_cnt) +\
+															";" + std::to_string(data.max_players) + ";" + std::to_string(server_guid) + ";" +\
+															data.level_name + ";" + data.gamemode + ";" + ((gmnum == -1) ? "" : std::to_string(gmnum)) +\
+															std::to_string(data.server_port) + ";" + std::to_string(data.server_portv6);
+											*(uint16_t*)(ptr + 25) = htons(slen);
+											strcpy((char*)ptr + 27, server_id_str.c_str());
+
+											// Send to client
+											n = sendto(listenfd, ptr, 27 + slen, 0, (sockaddr*)&client_in, clen);
+											if (n == -1) goto err;
+											break;
+										}
+										case 0x05: {
+											this->ProtocolVersion = ptr[17];
+
+											// start to build
+											mtu = n; ptr[0]++;
+											*(uint64_t*)(ptr + 17) = server_guid;
+											ptr[25] = t->security;
+											size_t mtu_fbase = 26;
+											if (ptr[25]) {
+												current_seed = seed; expected_cookie = current_seed ^ client_in.sin_addr.s_addr;
+												*(int*)(ptr + mtu_fbase) = seed ^ client_in.sin_addr.s_addr;
+												mtu_fbase += 4;
+												this->is_cookie = true;
+											}
+											*(uint16_t*)(ptr + mtu_fbase) = mtu;
+
+											n = sendto(listenfd, ptr, (ptr[25] ? 32 : 28), 0, (struct sockaddr*)&client_in, clen);
+											if (n == -1) goto err;
+											break;
+										}
+										case 0x07: {
+											size_t ServerAddrBase = 17;
+											
+											if (is_cookie) {
+												this->SecurityChallenge = ptr[21];
+												ServerAddrBase = 22;
+												if (current_seed ^ client_in.sin_addr.s_addr != expected_cookie) goto end;
+											}
+
+											if (ptr[ServerAddrBase] == 0x04) {
+												this->ServerIP = ntohl(~(*(uint32_t*)(ptr + ServerAddrBase + 1)));
+												this->ClientIP[cidx] = client_in.sin_addr.s_addr;
+												// this->ClientIPv6;
+												// ;
+											}
+
+											this->ClientGuid[cidx] = *(uint64_t*)(ptr + ServerAddrBase + 9); 
+
+											// Start to build `Open Connection Reply 2`
+											ptr[0]++; *(uint64_t*)(ptr + 17) = server_guid;
+											ptr[25] = 0x04; *(uint32_t*)(ptr + 26) = htonl(~(this->ClientIP[cidx]));
+											*(uint16_t*)(ptr + 30) = htons(client_in.sin_port);
+											*(uint16_t*)(ptr + 34) = mtu; ptr[34] = t->encryption;
+
+											n = sendto(listenfd, ptr, (t->ipv6 ? 57 : 35), 0, (struct sockaddr*)&client_in, clen);
+											if (n == -1) goto err;
+											break;
+										}
+										case 0x19: {
+											if (memcmp(ptr + 2, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16) == 0 && *(uint64_t*)(ptr + 18) == server_guid) {
+												CLIENT_SERVER_PROTOCOL_VERSION_NOT_MATCH_FAIL();
+												goto err;
+											}
+											break;
+										}
+										default:
+											if ((ptr[0] & 0x80) == 0x80 && (ptr[0] & 0x60) == 0) {
+												// local variable `reliability_type` equals a
+												#define rte(a) (reliability_type == a)
+												uint32_t SequenceNumber = 0; memcpy(&SequenceNumber, ptr + 1, 3); 
+												byte reliability_type = ptr[4] >> 5; bool is_slice = ptr[4] & 0x10 == 0x10;
+												uint16_t len_in_bits = ntohs(*(uint16_t*)(ptr + 5)); byte OrderChannel = 0;
+												uint32_t ReliableFrameIndex = 0, SequencedFrameIndex = 0, OrderedFrameIndex = 0;
+												size_t pos = 7;
+												// uint32_t CompoundSize = 0, SliceIndex = 0;
+												// std::unordered_map<uint16_t, uint32_t> Compound;
+												// nux::Pool nux::pool = nux::Pool(this->buffer.allocate(MB(8)), MB(8));
+
+												if (rte(ReliabilityType::ReliableSequenced) || rte(ReliabilityType::Reliable) ||\
+													rte(ReliabilityType::ReliableAndAckReceipt) || rte(ReliabilityType::ReliableOrderedAndAckReceipt) ||\
+													rte(ReliabilityType::ReliableOrdered)
+												) {
+													memcpy(&ReliableFrameIndex, ptr + pos, 3);
+													pos += 3;
+												}
+												if (rte(ReliabilityType::ReliableSequenced) || rte(ReliabilityType::UnreliableSequenced)) {
+													memcpy(&SequencedFrameIndex, ptr + pos, 3);
+													pos += 3;
+												}
+												if (rte(ReliabilityType::ReliableOrdered) || rte(ReliabilityType::ReliableOrderedAndAckReceipt)) {
+													memcpy(&OrderedFrameIndex, ptr + pos, 3);
+													pos += 3; OrderChannel = ptr[pos];
+												}
+												if (is_slice) {
+													;
+												}
+
+												uint32_t tmp_sn = SequenceNumber;
+
+												SequenceNumber++;
+												memcpy(ptr + 1, &SequenceNumber, 3);
+
+												NetworkBuffer.clear(tmp_base_offset);
+
+												printf("\n\nClient: ");
+												nux::fmt::show_bytes(ptr, n);
+
+												switch (ptr[pos]) {
+													case 0x09: {
+														{
+															byte* ack_packet = (byte*)NetworkBuffer.allocate(7);	
+															ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
+															ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
+															ssize_t n2 = sendto(listenfd, ack_packet, 7, 0, (struct sockaddr*)&client_in, clen);
+															if (n2 == -1) goto err;
+														}
+														uint64_t RequestTime = *(uint64_t*)(ptr + pos + 9);
+
+														ptr[pos] = 0x10; ptr[pos + 1] = (t->ipv6 ? 0x6 : 0x4);
+														*(uint32_t*)(ptr + pos + 2) = ~this->ClientIP[cidx];
+														*(uint16_t*)(ptr + pos + 6) = cidx; *(uint64_t*)(ptr + pos + 78) = RequestTime;
+
+														for (size_t j = 0; j < 10; j++)
+															memcpy(ptr + 8 + pos + (7 * j), NULL_ADDRESS, 7);					
+														*(uint64_t*)(ptr + pos + 86) = std::chrono::duration_cast<std::chrono::milliseconds>(
+															std::chrono::system_clock::now().time_since_epoch()
+														).count();
+
+														size_t size = pos + (t->ipv6 ? 335 : 93) + 1;
+
+														*(uint16_t*)(ptr + 5) = htons((size - pos) << 3);
+
+														n = sendto(listenfd, ptr, size, 0, (struct sockaddr*)&client_in, clen);
+														if (n == -1) goto err;
+														break;
+													}
+													case 0x00: {	// I don't know it can run here, or cannot run here
+														// Receive Connected Ping and Send Connected Pong
+														uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+															std::chrono::system_clock::now().time_since_epoch()
+														).count();
+														*(uint64_t*)(ptr + 9) = now;
+														ptr[0] = 0x03;
+														n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
+														if (n == -1) goto err;
+														goto build_connect;
+													}
+													case 0x13: {
+														printf("Can Run!\n");
+														break;
+													}
+													default: break;
+												}
+												#undef rte
+											}
+									}
+									goto build_connect;
+									end: ;
+								}
+							}
+						}
+					}
+					return;
+					err:
+						this->error = true; close(listenfd);
+						CPPRT_THROW_EXCEPTION_FAIL("\"" + strerror(errno) + "\"");
+						exit(1); return;
+				}
+		};
+	}
+#pragma endregion
+
+// ======================================================================
+// |				PART 8			Server								|
 // ======================================================================
 #pragma region
 	class Server {
@@ -766,16 +1093,9 @@ namespace nux {
 			static std::mutex ServerMutex;
 
 			bool error = false;		// Running Error
-			uint64_t server_guid = nux::math::random::randint();
 			std::atomic<unsigned long long int> tickcnt {0};
 			std::atomic<bool> running {false};
-			size_t player_cnt = 0;
-			byte ProtocolVersion = 0;
-			uint32_t ServerIP = 0;
-			byte ServerIPv6[16] = {0};
-
-			bool is_cookie = false;
-			bool SecurityChallenge = false;
+			
 
 			void run() {
 				while (this->running) {
@@ -797,8 +1117,7 @@ namespace nux {
 			}
 
 			void Network() {
-				// std::thread t1();
-				BedrockRakNet();
+				net::Network();
 			}
 
 			void InitWorlds() {
@@ -974,12 +1293,8 @@ namespace nux {
 					nux::log::info("Server shut down");
 			}
 
-			inline const ServerProperties GetServerProperties() {
-				return data;
-			}
-
 			inline uint64_t GetServerGuid() {
-				return this->server_guid;
+				return server_guid;
 			}
 
 			inline bool GetError() {
@@ -989,304 +1304,6 @@ namespace nux {
 			inline void stop() {
 				this->running = false;
 			}
-
-			inline size_t GetPlayerCount() {
-				return this->player_cnt;
-			}
-
-// ======================================================================
-// |				PART 7			Network								|
-// ======================================================================
-		private:
-		std::queue<Event> event_queue;
-		uint64_t* ClientGuid = nullptr;
-		uint32_t* ClientIP = nullptr;
-		byte* ClientIPv6;
-
-		sockaddr_in client_in;
-		socklen_t clen = sizeof(client_in);
-		int listenfd = -1;
-
-		void BedrockRakNet() {
-			// 0. initial
-			// i'm annoyed and tired... don't support ipv6 currently... (2026.10.18, bzjsmdl)
-
-			// create an arena of this thread
-			Arena NetworkBuffer(MB(16));
-			byte* ptr = (byte*)NetworkBuffer.allocate(MB(16));
-
-			// clear `errno`
-			errno = 0;
-
-			// other initialization
-			static uint64_t cidx;
-			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
-
-			epoll_event* events =  (epoll_event*)NetworkBuffer.allocate(sizeof(epoll_event) * 16);
-			this->ClientGuid = (uint64_t*)NetworkBuffer.allocate(sizeof(uint64_t) * data.max_players);
-			this->ClientIP = (uint32_t*)NetworkBuffer.allocate(sizeof(uint32_t) * data.max_players);
-			this->ClientIPv6 = (byte*)NetworkBuffer.allocate(sizeof(byte) * 16 * data.max_players);
-			size_t tmp_base_offset = NetworkBuffer.size();
-			
-			// 1. create a UDP socket and an epoll instance
-			// 1.1 create a UDP socket 
-			int listenfd = -1, epollfd = -1;
-			listenfd = socket((t->ipv6) ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
-			if (listenfd == -1) goto err;
-
-			// 1.2 create an epoll instance (I'm so bored...)
-			epollfd = epoll_create1(0);
-			if (epollfd == -1) goto err;
-
-			nux::log::info("Server has created a UDP socket");
-
-			// 2. bind a fixed port
-			client_in.sin_family = (t->ipv6) ? AF_INET6 : AF_INET;
-			client_in.sin_port = htons((t->ipv6) ? data.server_portv6 : data.server_port);
-			client_in.sin_addr.s_addr = htonl(INADDR_ANY);
-			if (bind(listenfd, (const sockaddr*)&client_in, clen) == -1) goto err;
-			nux::log::info("Server has successfully bound port " + std::to_string(((t->ipv6) ? data.server_portv6 : data.server_port)));
-			
-			{
-				int current_flags = fcntl(listenfd, F_GETFL, 0);
-				// socket is set as non-blocking
-				fcntl(listenfd, F_SETFL, current_flags | O_NONBLOCK);
-
-				// `listenfd` is registered in epoll
-				epoll_event ev = *(epoll_event*)NetworkBuffer.allocate(sizeof(epoll_event));
-				ev.events = EPOLLIN | EPOLLET;
-				// EPOLLIN : read; EPOLLET: ET mode
-				ev.data.fd = listenfd;
-				epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev);
-			}	
-			
-			nux::log::info("Try to build connection with client");
-			// 4. build connection with client
-			
-			while (true) {
-				int seed = 0; bool first = true;
-				ssize_t n = epoll_wait(epollfd, events, 16, 5000);
-				if (n == 0) {
-					seed = nux::math::random::randint();
-					continue;
-				}
-				if (n == -1) {
-					if (errno == EINTR || errno == EWOULDBLOCK) continue;
-					goto err;
-				}
-				
-
-				for (ssize_t i = 0; i < n; i++) {
-					if (events[i].data.fd == listenfd) {
-						int current_seed = 0;
-						int expected_cookie = 0;
-						build_connect: {
-							// Receive Client Data
-							n = recvfrom(listenfd, ptr, MB(4), 0, (sockaddr*)&client_in, &clen);
-							if (n == -1) {
-								if (errno == EINTR || errno == EWOULDBLOCK) goto build_connect;
-								break;
-							}
-
-							uint16_t mtu = 0;
-							switch (ptr[0]) {
-								case ID_UNCONNECTED_PING_OPEN_CONNECTIONS:
-									if (this->GetPlayerCount() >= data.max_players) break;
-								case ID_UNCONNECTED_PING: {
-									// Build an Unconnected Pong
-									ptr[0] = 0x1c;
-									*(uint64_t*)(ptr + 1) = server_guid;
-									memcpy(ptr + 9, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16);
-
-									std::string cpy = data.gamemode;
-									cpy[0] |= 0x20;
-									int gmnum = 0;
-									switch (cpy[0]) {
-										case 'A':
-											gmnum++;
-										case 'C':
-											gmnum++;
-											break;
-										case 'S':
-											if (cpy[1] == 'u') break;
-										default:
-											gmnum = -1; 
-									}
-										
-									std::string server_id_str = "MCPE;";
-									uint16_t slen = server_id_str.length();
-									server_id_str += data.server_name + ";" + "766;1.21.50;" + std::to_string(this->GetPlayerCount()) +\
-													";" + std::to_string(data.max_players) + ";" + std::to_string(server_guid) + ";" +\
-													data.level_name + ";" + data.gamemode + ";" + ((gmnum == -1) ? "" : std::to_string(gmnum)) +\
-													std::to_string(data.server_port) + ";" + std::to_string(data.server_portv6);
-									*(uint16_t*)(ptr + 25) = htons(slen);
-									strcpy((char*)ptr + 27, server_id_str.c_str());
-
-									// Send to client
-									n = sendto(listenfd, ptr, 27 + slen, 0, (sockaddr*)&client_in, clen);
-									if (n == -1) goto err;
-									break;
-								}
-								case 0x05: {
-									this->ProtocolVersion = ptr[17];
-
-									// start to build
-									mtu = n; ptr[0]++;
-									*(uint64_t*)(ptr + 17) = this->server_guid;
-									ptr[25] = t->security;
-									size_t mtu_fbase = 26;
-									if (ptr[25]) {
-										current_seed = seed; expected_cookie = current_seed ^ client_in.sin_addr.s_addr;
-										*(int*)(ptr + mtu_fbase) = seed ^ client_in.sin_addr.s_addr;
-										mtu_fbase += 4;
-										this->is_cookie = true;
-									}
-									*(uint16_t*)(ptr + mtu_fbase) = mtu;
-
-									n = sendto(listenfd, ptr, (ptr[25] ? 32 : 28), 0, (struct sockaddr*)&client_in, clen);
-									if (n == -1) goto err;
-									break;
-								}
-								case 0x07: {
-									size_t ServerAddrBase = 17;
-									
-									if (is_cookie) {
-										this->SecurityChallenge = ptr[21];
-										ServerAddrBase = 22;
-										if (current_seed ^ client_in.sin_addr.s_addr != expected_cookie) goto end;
-									}
-
-									if (ptr[ServerAddrBase] == 0x04) {
-										this->ServerIP = ntohl(~(*(uint32_t*)(ptr + ServerAddrBase + 1)));
-										this->ClientIP[cidx] = client_in.sin_addr.s_addr;
-										// this->ClientIPv6;
-										// ;
-									}
-
-									this->ClientGuid[cidx] = *(uint64_t*)(ptr + ServerAddrBase + 9); 
-
-									// Start to build `Open Connection Reply 2`
-									ptr[0]++; *(uint64_t*)(ptr + 17) = this->server_guid;
-									ptr[25] = 0x04; *(uint32_t*)(ptr + 26) = htonl(~(this->ClientIP[cidx]));
-									*(uint16_t*)(ptr + 30) = htons(client_in.sin_port);
-									*(uint16_t*)(ptr + 34) = mtu; ptr[34] = t->encryption;
-
-									n = sendto(listenfd, ptr, (t->ipv6 ? 57 : 35), 0, (struct sockaddr*)&client_in, clen);
-									if (n == -1) goto err;
-									break;
-								}
-								case 0x19: {
-									if (memcmp(ptr + 2, BEDROCK_RAKNET_OFFLINE_MESSAGE_DATA_ID, 16) == 0 && *(uint64_t*)(ptr + 18) == this->server_guid) {
-										CLIENT_SERVER_PROTOCOL_VERSION_NOT_MATCH_FAIL();
-										goto err;
-									}
-									break;
-								}
-								default:
-									if ((ptr[0] & 0x80) == 0x80 && (ptr[0] & 0x60) == 0) {
-										// local variable `reliability_type` equals a
-										#define rte(a) (reliability_type == a)
-										uint32_t SequenceNumber = 0; memcpy(&SequenceNumber, ptr + 1, 3); 
-										byte reliability_type = ptr[4] >> 5; bool is_slice = ptr[4] & 0x10 == 0x10;
-										uint16_t len_in_bits = ntohs(*(uint16_t*)(ptr + 5)); byte OrderChannel = 0;
-										uint32_t ReliableFrameIndex = 0, SequencedFrameIndex = 0, OrderedFrameIndex = 0;
-										size_t pos = 7;
-										// uint32_t CompoundSize = 0, SliceIndex = 0;
-										// std::unordered_map<uint16_t, uint32_t> Compound;
-										// nux::Pool nux::pool = nux::Pool(this->buffer.allocate(MB(8)), MB(8));
-
-										if (rte(ReliabilityType::ReliableSequenced) || rte(ReliabilityType::Reliable) ||\
-											rte(ReliabilityType::ReliableAndAckReceipt) || rte(ReliabilityType::ReliableOrderedAndAckReceipt) ||\
-											rte(ReliabilityType::ReliableOrdered)
-										) {
-											memcpy(&ReliableFrameIndex, ptr + pos, 3);
-											pos += 3;
-										}
-										if (rte(ReliabilityType::ReliableSequenced) || rte(ReliabilityType::UnreliableSequenced)) {
-											memcpy(&SequencedFrameIndex, ptr + pos, 3);
-											pos += 3;
-										}
-										if (rte(ReliabilityType::ReliableOrdered) || rte(ReliabilityType::ReliableOrderedAndAckReceipt)) {
-											memcpy(&OrderedFrameIndex, ptr + pos, 3);
-											pos += 3; OrderChannel = ptr[pos];
-										}
-										if (is_slice) {
-											;
-										}
-
-										uint32_t tmp_sn = SequenceNumber;
-
-										SequenceNumber++;
-										memcpy(ptr + 1, &SequenceNumber, 3);
-
-										NetworkBuffer.clear(tmp_base_offset);
-
-										printf("\n\nClient: ");
-										nux::fmt::show_bytes(ptr, n);
-
-										switch (ptr[pos]) {
-											case 0x09: {
-												{
-													byte* ack_packet = (byte*)NetworkBuffer.allocate(7);	
-													ack_packet[0] = 0xC0; *(uint16_t*)(ack_packet + 1) = 1;
-													ack_packet[3] = 0x01; memcpy(ack_packet + 4, &tmp_sn, 3);
-													ssize_t n2 = sendto(listenfd, ack_packet, 7, 0, (struct sockaddr*)&client_in, clen);
-													if (n2 == -1) goto err;
-												}
-												uint64_t RequestTime = *(uint64_t*)(ptr + pos + 9);
-
-												ptr[pos] = 0x10; ptr[pos + 1] = (t->ipv6 ? 0x6 : 0x4);
-												*(uint32_t*)(ptr + pos + 2) = ~this->ClientIP[cidx];
-												*(uint16_t*)(ptr + pos + 6) = cidx; *(uint64_t*)(ptr + pos + 78) = RequestTime;
-
-												for (size_t j = 0; j < 10; j++)
-													memcpy(ptr + 8 + pos + (7 * j), NULL_ADDRESS, 7);					
-												*(uint64_t*)(ptr + pos + 86) = std::chrono::duration_cast<std::chrono::milliseconds>(
-													std::chrono::system_clock::now().time_since_epoch()
-												).count();
-
-												size_t size = pos + (t->ipv6 ? 335 : 93) + 1;
-
-												*(uint16_t*)(ptr + 5) = htons((size - pos) << 3);
-
-												n = sendto(listenfd, ptr, size, 0, (struct sockaddr*)&client_in, clen);
-												if (n == -1) goto err;
-												break;
-											}
-											case 0x00: {	// I don't know it can run here, or cannot run here
-												// Receive Connected Ping and Send Connected Pong
-												uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-													std::chrono::system_clock::now().time_since_epoch()
-												).count();
-												*(uint64_t*)(ptr + 9) = now;
-												ptr[0] = 0x03;
-												n = sendto(listenfd, ptr, 17, 0, (sockaddr*)&client_in, clen);
-												if (n == -1) goto err;
-												goto build_connect;
-											}
-											case 0x13: {
-												printf("Can Run!\n");
-												break;
-											}
-											default: break;
-										}
-										#undef rte
-									}
-							}
-							goto build_connect;
-							end: ;
-						}
-					}
-				}
-			}
-			return;
-			err:
-				this->error = true;
-				close(listenfd);
-				CPPRT_THROW_EXCEPTION_FAIL("\"" + strerror(errno) + "\"");
-				this->stop();
-				return;
-		}
 	};
 #pragma endregion
 
@@ -1296,6 +1313,7 @@ namespace nux {
 // |				THE LAST PART		Nux Server Entry				|
 // ======================================================================
 int main(int argc, const char** argv) {
+	server_guid = nux::math::random::randint();
 	t->data_path = t->ServerRootDir + "/data/"; t->plugins_path = t->ServerRootDir + "/plugins/";
 	for (int i = 0; i < argc; i++) {
 		if (strequ(argv[i], "--load-plugins")) t->LoadPlugin = true;
@@ -1316,7 +1334,6 @@ int main(int argc, const char** argv) {
 				case 'g': t->max_memory = GB(atoll(argv[i])); break;
 				default: t->max_memory = atoll(argv[i]);
 			}
-			argv[i][len - 1];
 		}
 	}
 	nux::Server server = nux::Server();
