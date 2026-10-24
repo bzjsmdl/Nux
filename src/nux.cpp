@@ -184,7 +184,7 @@
 			bool allow_player_joining = true;
 			size_t max_threads = 8;
 			std::string level_name = "Bedrock level";
-			signed long long int seed;	// default null.
+			signed long long int level_seed;	// default null.
 			std::string default_player_permission_level = "member";
 			bool texturepack_required = false;
 			bool content_log_file_enabled = false;
@@ -242,8 +242,85 @@
 			// emm...these options may look like Nukkit-MOT...
 			bool netease_support = false;
 			bool only_netease = false;
+
+			void set(size_t n, const std::variant<bool, size_t, float, std::string, signed long long int, const char*, char*> __val) {
+				switch (n) {
+					case 0:  server_name = std::get<decltype(server_name)>(__val); break;
+					case 1:  gamemode = std::get<decltype(gamemode)>(__val); break;
+					case 2:  force_gamemode = std::get<decltype(force_gamemode)>(__val); break;
+					case 3:  difficulty = std::get<decltype(difficulty)>(__val); break;
+					case 4:  allow_cheats = std::get<decltype(allow_cheats)>(__val); break;
+					case 5:  max_players = std::get<decltype(max_players)>(__val); break;
+					case 6:  online_mode = std::get<decltype(online_mode)>(__val); break;
+					case 7:  allow_list = std::get<decltype(allow_list)>(__val); break;
+					case 8:  server_port = std::get<decltype(server_port)>(__val); break;
+					case 9:  server_portv6 = std::get<decltype(server_portv6)>(__val); break;
+					case 10: enable_lan_visibility = std::get<decltype(enable_lan_visibility)>(__val); break;
+					case 11: view_distance = std::get<decltype(view_distance)>(__val); break;
+					case 12: tick_distance = std::get<decltype(tick_distance)>(__val); break;
+					case 13: player_idle_timeout = std::get<decltype(player_idle_timeout)>(__val); break;
+					case 14: allow_player_joining = std::get<decltype(allow_player_joining)>(__val); break;
+					case 15: max_threads = std::get<decltype(max_threads)>(__val); break;
+					case 16: level_name = std::get<decltype(level_name)>(__val); break;
+					case 17: level_seed = std::get<decltype(level_seed)>(__val); break;
+					case 18: default_player_permission_level = std::get<decltype(default_player_permission_level)>(__val); break;
+					case 19: texturepack_required = std::get<decltype(texturepack_required)>(__val); break;
+					case 20: content_log_file_enabled = std::get<decltype(content_log_file_enabled)>(__val); break;
+					case 21: content_log_console_output_enabled = std::get<decltype(content_log_console_output_enabled)>(__val); break;
+					case 22: content_log_level = std::get<decltype(content_log_level)>(__val); break;
+					case 23: compression_threshold = std::get<decltype(compression_threshold)>(__val); break;
+					case 24: compression_algorithm = std::get<decltype(compression_algorithm)>(__val); break;
+					case 25: server_authoritative_movement_strict = std::get<decltype(server_authoritative_movement_strict)>(__val); break;
+					case 26: server_authoritative_dismount_strict = std::get<decltype(server_authoritative_dismount_strict)>(__val); break;
+					case 27: server_authoritative_entity_interactions_strict = std::get<decltype(server_authoritative_entity_interactions_strict)>(__val); break;
+					case 28: player_position_acceptance_threshold = std::get<decltype(player_position_acceptance_threshold)>(__val); break;
+					case 29: player_movement_action_direction_threshold = std::get<decltype(player_movement_action_direction_threshold)>(__val); break;
+					case 30: server_authoritative_block_breaking_pick_range_scalar = std::get<decltype(server_authoritative_block_breaking_pick_range_scalar)>(__val); break;
+					case 31: chat_restriction = std::get<decltype(chat_restriction)>(__val); break;
+					case 32: disable_player_interaction = std::get<decltype(disable_player_interaction)>(__val); break;
+					case 33: client_side_chunk_generation_enabled = std::get<decltype(client_side_chunk_generation_enabled)>(__val); break;
+					case 34: block_network_ids_are_hashes = std::get<decltype(block_network_ids_are_hashes)>(__val); break;
+					case 35: disable_persona = std::get<decltype(disable_persona)>(__val); break;
+					case 36: disable_custom_skins = std::get<decltype(disable_custom_skins)>(__val); break;
+					case 37: server_build_radius_ratio = std::get<decltype(server_build_radius_ratio)>(__val); break;
+					case 38: allow_outbound_script_debugging = std::get<decltype(allow_outbound_script_debugging)>(__val); break;
+					case 39: allow_inbound_script_debugging = std::get<decltype(allow_inbound_script_debugging)>(__val); break;
+					case 40: force_inbound_debug_port = std::get<decltype(force_inbound_debug_port)>(__val); break;
+					case 41: script_debugger_auto_attach = std::get<decltype(script_debugger_auto_attach)>(__val); break;
+					case 42: script_debugger_auto_attach_connect_address = std::get<decltype(script_debugger_auto_attach_connect_address)>(__val); break;
+					case 43: script_debugger_auto_attach_timeout = std::get<decltype(script_debugger_auto_attach_timeout)>(__val); break;
+					case 44: script_debugger_passcode = std::get<decltype(script_debugger_passcode)>(__val); break;
+					case 45: script_watchdog_enable = std::get<decltype(script_watchdog_enable)>(__val); break;
+					case 46: script_watchdog_enable_exception_handling = std::get<decltype(script_watchdog_enable_exception_handling)>(__val); break;
+					case 47: script_watchdog_enable_shutdown = std::get<decltype(script_watchdog_enable_shutdown)>(__val); break;
+					case 48: script_watchdog_hang_exception = std::get<decltype(script_watchdog_hang_exception)>(__val); break;
+					case 49: script_watchdog_hang_threshold = std::get<decltype(script_watchdog_hang_threshold)>(__val); break;
+					case 50: script_watchdog_spike_threshold = std::get<decltype(script_watchdog_spike_threshold)>(__val); break;
+					case 51: script_watchdog_slow_threshold = std::get<decltype(script_watchdog_slow_threshold)>(__val); break;
+					case 52: script_watchdog_memory_warning = std::get<decltype(script_watchdog_memory_warning)>(__val); break;
+					case 53: script_watchdog_memory_limit = std::get<decltype(script_watchdog_memory_limit)>(__val); break;
+					case 54: diagnostics_capture_auto_start = std::get<decltype(diagnostics_capture_auto_start)>(__val); break;
+					case 55: diagnostics_capture_max_files = std::get<decltype(diagnostics_capture_max_files)>(__val); break;
+					case 56: diagnostics_capture_max_file_size = std::get<decltype(diagnostics_capture_max_file_size)>(__val); break;
+					case 57: disable_client_vibrant_visuals = std::get<decltype(disable_client_vibrant_visuals)>(__val); break;
+					case 58: sentry_rate_limit_window = std::get<decltype(sentry_rate_limit_window)>(__val); break;
+					case 59: sentry_max_events_per_window = std::get<decltype(sentry_max_events_per_window)>(__val); break;
+					case 60: enable_profiler = std::get<decltype(enable_profiler)>(__val); break;
+					case 61: enable_editor_network_metrics = std::get<decltype(enable_editor_network_metrics)>(__val); break;
+					case 62: level_type = std::get<decltype(level_type)>(__val); break;
+					case 63: server_authoritative_block_breaking = std::get<decltype(server_authoritative_block_breaking)>(__val); break;
+					case 64: emit_server_telemetry = std::get<decltype(emit_server_telemetry)>(__val); break;
+					case 65: isHardcore = std::get<decltype(isHardcore)>(__val); break;
+					case 66: language = std::get<decltype(language)>(__val); break;
+					case 67: op_permission_level = std::get<decltype(op_permission_level)>(__val); break;
+					case 68: netease_support = std::get<decltype(netease_support)>(__val); break;
+					case 69: only_netease = std::get<decltype(only_netease)>(__val); break;
+					default: throw std::out_of_range("invalid index");
+					level_seed;
+				}
+			}
 			
-			std::any operator[] (size_t n) {
+			std::any get(size_t n) {
 				switch (n) {
 					case 0: return std::ref(server_name);
 					case 1: return std::ref(gamemode);
@@ -262,7 +339,7 @@
 					case 14: return std::ref(allow_player_joining);
 					case 15: return std::ref(max_threads);
 					case 16: return std::ref(level_name);
-					case 17: return std::ref(seed);
+					case 17: return std::ref(level_seed);
 					case 18: return std::ref(default_player_permission_level);
 					case 19: return std::ref(texturepack_required);
 					case 20: return std::ref(content_log_file_enabled);
@@ -327,6 +404,7 @@
 // ======================================================================
 #pragma region
 	Table* t = nullptr;
+	ServerProperties data;
 #pragma endregion
 
 // ======================================================================
@@ -617,7 +695,7 @@
 			public:
 				Cursor(nux::Pool& __data) {
 					this->pool_size = __data.size();
-					this->data = (const byte*)__data.data();
+					data = (const byte*)__data.data();
 				}
 
 				inline void seek(size_t pos, bool read) { read ? this->rseek(pos) : this->wseek(pos); }
@@ -657,7 +735,7 @@
 						VECTOR_TOO_SMALL_FAIL("`nux::Cursor::rpos`");
 						this->error = true; return ret;
 					}
-					memcpy(&ret, (this->data + this->rpos), size);
+					memcpy(&ret, (data + this->rpos), size);
 
 					// i promise it don't throw an error~ 绝对!!!
 					rseek(size);
@@ -669,7 +747,7 @@
 						VECTOR_TOO_SMALL_FAIL("`nux::Cursor::wpos`");
 						this->error = true; return;
 					}
-					memcpy((byte*)(this->data + this->wpos), data, size);
+					memcpy((byte*)(data + this->wpos), data, size);
 
 					wseek(size);
 				}
@@ -689,7 +767,6 @@
 
 			bool error = false;		// Running Error
 			uint64_t server_guid = nux::math::randint();
-			ServerProperties data;
 			std::atomic<unsigned long long int> tickcnt {0};
 			std::atomic<bool> running {false};
 			size_t player_cnt = 0;
@@ -745,7 +822,7 @@
 					hd_config = fopen(config_file.c_str(), "wb");
 					if (errno != 0 && hd_config == nullptr) {
 						nux::log::error("Failed to create file " + config_file + ". Because " + (std::string)strerror(errno));
-						this->error = true;	return;
+						goto err;
 					}
 					nux::log::info("Successfully create file " +  config_file);
 				}
@@ -753,7 +830,7 @@
 					hd_config = fopen(config_file.c_str(), "rb");
 					if (errno != 0 && hd_config == nullptr) {
 						nux::log::error("Failed to open file " + config_file + ". Because " + (std::string)strerror(errno));
-						this->error = true;	return;
+						goto err;
 					}
 					nux::log::info("Successfully open file " +  config_file);
 				}
@@ -763,7 +840,7 @@
 					if (ret != DEFAULT_CONFIG_SIZE) {
 						if (ferror(hd_config)) CONFIG_PARSE_FAIL("CRT: " + (std::string)(strerror(errno)))
 						else CONFIG_PARSE_FAIL("Expected " + std::to_string(DEFAULT_CONFIG_SIZE) + " elements, but got " + std::to_string(ret) + " elements")
-						this->error = true; return;
+						goto err;
 					}
 					
 					// parse file
@@ -772,7 +849,7 @@
 					}
 					catch (const std::exception& e) {
 						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
-						this->error = true; return;
+						goto err;
 					}
 				}
 				else {
@@ -790,7 +867,7 @@
 					}
 					catch (const std::exception& e) {
 						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
-						this->error = true; return;
+						goto err;
 					}
 				}
 				fclose(hd_config);
@@ -803,14 +880,14 @@
 							std::string key = options[i];
 							if (key == "gamemode" && config[key].is_number_integer()) {
 								switch ((int)config[key]) {
-									case 0: this->data[i] = "survival"; break;
-									case 1: this->data[i] = "creative"; break;
-									case 2: this->data[i] = "adventure"; break;
-									case 5: this->data[i] = "default"; break;
+									case 0: data.set(i, "survival"); break;
+									case 1: data.set(i, "creative"); break;
+									case 2: data.set(i, "adventure"); break;
+									case 5: data.set(i, "default"); break;
 									default: {
 										if (t->werr) {
 											CONFIG_PARSE_FAIL("`gamemode` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 5)");
-											this->error = true; return;
+											goto err;
 										}
 										else CONFIG_PARSE_WARN("`gamemode` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 5)\nserver used the default value \"survival\"(0)");
 									}
@@ -818,34 +895,49 @@
 							}
 							else if (key == "difficulty" && config[key].is_number_integer()) {
 								switch ((int)config[key]) {
-									case 0: this->data[i] = "peaceful"; break;
-									case 1: this->data[i] = "easy"; break;
-									case 2: this->data[i] = "normal"; break;
-									case 3: this->data[i] = "hard"; break;
+									case 0: data.set(i, "peaceful"); break;
+									case 1: data.set(i, "easy"); break;
+									case 2: data.set(i, "normal"); break;
+									case 3: data.set(i, "hard"); break;
 									default: {
 										if (t->werr) {
 											CONFIG_PARSE_FAIL("`difficulty` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 3)");
-											this->error = true; return;
+											goto err;
 										}
 										else CONFIG_PARSE_WARN("`difficulty` must be not " + std::to_string((int)config[options[i]]) + " (it can only be 0, 1, 2 or 3)\nserver used the default value \"easy\"(1)");
 									}
 								}
 							}
 							else if (key == "server-build-radius-ratio" && config[key].is_number_float()) {
-								this->data.server_build_radius_ratio = std::to_string((float)config[key]);
+								data.server_build_radius_ratio = std::to_string((float)config[key]);
 							}
-							else if (config[key].is_null()) {
-								CONFIG_PARSE_FAIL(key + "'s value from null is not valid");
-								this->error = true; return;
+							else if (key == "level-seed") {
+								std::string tmp = (config[key].is_string()) ? config[key] : "";
+								data.set(i, (tmp.empty() ? (signed long long int)nux::math::randint() : (signed long long int)config[key]));
 							}
-							else this->data[i] = config[key];
+							else {
+								if (config[key].is_boolean()) data.set(i, (bool)config[key]);
+								else if (config[key].is_string()) data.set(i, (std::string)config[key]);
+								else if (config[key].is_number_unsigned()) data.set(i, (size_t)config[key]);
+								else if (config[key].is_number_float()) data.set(i, (float)config[key]);
+								else if (config[key].is_null()) {
+									CONFIG_PARSE_FAIL(key + "'s value from null is not valid");
+									goto err;
+								}
+								else {
+									CONFIG_PARSE_FAIL(key + " is unsupported json type");
+									goto err;
+								}
+							}
 						}
 					}
 					catch (const std::exception& e) {
-						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\"");
-						this->error = true; return;
+						CPPRT_THROW_EXCEPTION_FAIL("\"" + e.what() + "\" (in opition " + "`" + options[i] + "`)");
+						goto err;
 					}	
 				}
+				return;
+				err: this->error = true;
 			}
 
 			bool EnsureDirExists(const std::string& path) {
@@ -886,7 +978,7 @@
 			}
 
 			inline const ServerProperties GetServerProperties() {
-				return this->data;
+				return data;
 			}
 
 			inline uint64_t GetServerGuid() {
@@ -936,9 +1028,9 @@
 			sockaddr_in client_in; socklen_t clen = sizeof(client_in);
 
 			epoll_event* events =  (epoll_event*)localbuffer.allocate(sizeof(epoll_event) * 16);
-			this->ClientGuid = (uint64_t*)localbuffer.allocate(sizeof(uint64_t) * this->data.max_players);
-			this->ClientIP = (uint32_t*)localbuffer.allocate(sizeof(uint32_t) * this->data.max_players);
-			this->ClientIPv6 = (byte*)localbuffer.allocate(sizeof(byte) * 16 * this->data.max_players);
+			this->ClientGuid = (uint64_t*)localbuffer.allocate(sizeof(uint64_t) * data.max_players);
+			this->ClientIP = (uint32_t*)localbuffer.allocate(sizeof(uint32_t) * data.max_players);
+			this->ClientIPv6 = (byte*)localbuffer.allocate(sizeof(byte) * 16 * data.max_players);
 			size_t tmp_base_offset = localbuffer.used();
 			
 			// 1. create a UDP socket and an epoll instance
