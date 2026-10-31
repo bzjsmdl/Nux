@@ -1,2 +1,2 @@
 # Nux
-This is a Minecraft Bedrock Server Core. It hasn't finished. Don't use it. 
+This is a Minecraft Bedrock Server Core. It uses C++. I've not finished it. Don't use it. But if you want to join in, welcome.
